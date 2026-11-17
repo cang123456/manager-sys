@@ -142,11 +142,8 @@ function isActive(r) {
 }
 
 function tagActiveStyle(tag) {
-  if (!isActive(tag) || tagsViewStyle.value !== 'card') return {}
-  return {
-    'background-color': theme.value,
-    'border-color': theme.value
-  }
+  // 激活态样式完全交给 CSS（Apple 风：白底 + 深字 + 极轻阴影）
+  return {}
 }
 
 function isAffix(tag) {
@@ -370,7 +367,7 @@ function handleScroll() {
 </script>
 
 <style lang="scss" scoped>
-$tags-bar-height: 34px;
+$tags-bar-height: 40px;
 
 .tags-view-container {
   height: $tags-bar-height;
@@ -633,6 +630,123 @@ $tags-bar-height: 34px;
     }
   }
 }
+
+/* ============================================================
+   Apple 风覆盖层：透明底 + 胶囊页签 + 极细分割
+   ============================================================ */
+.tags-view-container {
+  height: var(--ap-tags-h);
+  background: transparent;
+  border-bottom: 1px solid var(--ap-hairline);
+  padding: 0 10px;
+  gap: 2px;
+
+  .tags-nav-btn,
+  .tags-action-btn {
+    width: 26px;
+    height: 26px;
+    border: none !important;
+    border-radius: 50%;
+    font-size: 12px;
+    color: var(--ap-text-tertiary);
+
+    &:hover:not(.disabled) {
+      background: var(--ap-fill);
+      color: var(--ap-text);
+    }
+
+    &.disabled {
+      color: var(--ap-text-quaternary);
+    }
+  }
+
+  .tags-refresh-btn {
+    width: auto;
+    padding: 0 10px;
+    border-radius: var(--ap-radius-pill);
+    font-size: 12px;
+    gap: 4px;
+  }
+
+  .tags-view-wrapper {
+    .tags-view-item {
+      height: 26px;
+      line-height: 24px;
+      padding: 0 11px !important;
+      margin-left: 4px;
+      border: none;
+      border-radius: var(--ap-radius-pill);
+      font-size: 12.5px;
+      font-weight: 400;
+      letter-spacing: -0.005em;
+      color: var(--ap-text-secondary);
+      background: transparent;
+      transition: background-color 0.18s var(--ap-ease),
+        color 0.18s var(--ap-ease), box-shadow 0.18s var(--ap-ease);
+
+      &:hover:not(.active) {
+        background: var(--ap-fill) !important;
+        color: var(--ap-text);
+      }
+
+      &.active {
+        background: var(--ap-surface) !important;
+        color: var(--ap-text) !important;
+        font-weight: 500;
+        box-shadow: var(--ap-shadow-xs), 0 0 0 1px var(--ap-hairline);
+      }
+
+      &.active::before {
+        content: none !important;
+        display: none !important;
+      }
+    }
+  }
+
+  .contextmenu {
+    border-radius: var(--ap-radius-md);
+    border: 1px solid var(--ap-hairline);
+    padding: 6px;
+    box-shadow: var(--ap-shadow-pop);
+    font-size: 13px;
+
+    li {
+      padding: 7px 12px;
+      border-radius: var(--ap-radius-xs);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+  }
+}
+
+/* chrome 风格也统一到浅色胶囊语义 */
+.tags-view-container.tags-view-container--chrome {
+  --chrome-strip-bg: transparent;
+  --chrome-strip-border: transparent;
+  --chrome-tab-active-bg: var(--ap-surface);
+  --chrome-tab-text: var(--ap-text-secondary);
+  --chrome-tab-text-active: var(--ap-text);
+
+  background: transparent;
+  border-bottom: 1px solid var(--ap-hairline);
+
+  .tags-view-wrapper .tags-view-item {
+    border-radius: var(--ap-radius-pill) !important;
+    margin: 0 2px !important;
+    border-left: none !important;
+
+    &::before,
+    &::after {
+      content: none !important;
+      box-shadow: none !important;
+    }
+
+    &.active {
+      box-shadow: var(--ap-shadow-xs), 0 0 0 1px var(--ap-hairline);
+    }
+  }
+}
 </style>
 
 <style lang="scss">
@@ -699,14 +813,14 @@ $tags-bar-height: 34px;
 
 .main-container.fullscreen-mode .app-main {
   position: fixed;
-  top: 34px;
+  top: var(--ap-tags-h, 40px);
   left: 0;
   right: 0;
   bottom: 0;
   margin: 0 !important;
   padding: 0 !important;
-  height: calc(100vh - 34px) !important;
-  min-height: calc(100vh - 34px) !important;
+  height: calc(100vh - var(--ap-tags-h, 40px)) !important;
+  min-height: calc(100vh - var(--ap-tags-h, 40px)) !important;
   overflow: auto;
 }
 </style>

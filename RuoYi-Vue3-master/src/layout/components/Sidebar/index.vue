@@ -1,14 +1,11 @@
 <template>
-  <div :class="['sidebar-theme-wrapper', {'has-logo':showLogo}, sideTheme]" class="sidebar-container">
+  <div :class="['sidebar-theme-wrapper', { 'has-logo': showLogo }, sideTheme]" class="sidebar-container">
     <logo v-if="showLogo" :collapse="isCollapse" />
     <el-scrollbar wrap-class="scrollbar-wrapper">
       <el-menu
         :default-active="activeMenu"
         :collapse="isCollapse"
-        :background-color="getMenuBackground"
-        :text-color="getMenuTextColor"
         :unique-opened="true"
-        :active-text-color="theme"
         :collapse-transition="false"
         mode="vertical"
         :class="sideTheme"
@@ -27,7 +24,6 @@
 <script setup>
 import Logo from './Logo'
 import SidebarItem from './SidebarItem'
-import variables from '@/assets/styles/variables.module.scss'
 import useAppStore from '@/store/modules/app'
 import useSettingsStore from '@/store/modules/settings'
 import usePermissionStore from '@/store/modules/permission'
@@ -40,24 +36,7 @@ const permissionStore = usePermissionStore()
 const sidebarRouters = computed(() => permissionStore.sidebarRouters)
 const showLogo = computed(() => settingsStore.sidebarLogo)
 const sideTheme = computed(() => settingsStore.sideTheme)
-const theme = computed(() => settingsStore.theme)
 const isCollapse = computed(() => !appStore.sidebar.opened)
-
-// 获取菜单背景色
-const getMenuBackground = computed(() => {
-  if (settingsStore.isDark) {
-    return 'var(--sidebar-bg)'
-  }
-  return sideTheme.value === 'theme-dark' ? variables.menuBg : variables.menuLightBg
-})
-
-// 获取菜单文字颜色
-const getMenuTextColor = computed(() => {
-  if (settingsStore.isDark) {
-    return 'var(--sidebar-text)'
-  }
-  return sideTheme.value === 'theme-dark' ? variables.menuText : variables.menuLightText
-})
 
 const activeMenu = computed(() => {
   const { meta, path } = route
@@ -69,36 +48,20 @@ const activeMenu = computed(() => {
 </script>
 
 <style lang="scss" scoped>
+// 具体配色由 assets/styles/sidebar.scss（Apple 风）接管，
+// 这里只保留结构相关声明，避免旧皮肤变量渗透。
 .sidebar-container {
-  background-color: v-bind(getMenuBackground);
-  
+  background-color: var(--sidebar-bg);
+
   .scrollbar-wrapper {
-    background-color: v-bind(getMenuBackground);
+    background-color: transparent;
   }
 
   .el-menu {
     border: none;
     height: 100%;
     width: 100% !important;
-    
-    .el-menu-item, .el-sub-menu__title {
-      &:hover {
-        background-color: var(--menu-hover, rgba(0, 0, 0, 0.06)) !important;
-      }
-    }
-
-    .el-menu-item {
-      color: v-bind(getMenuTextColor);
-      
-      &.is-active {
-        color: var(--menu-active-text, #409eff);
-        background-color: var(--menu-hover, rgba(0, 0, 0, 0.06)) !important;
-      }
-    }
-
-    .el-sub-menu__title {
-      color: v-bind(getMenuTextColor);
-    }
+    background-color: transparent;
   }
 }
 </style>

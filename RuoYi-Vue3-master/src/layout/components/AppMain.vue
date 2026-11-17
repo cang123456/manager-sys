@@ -1,11 +1,16 @@
 <template>
   <section class="app-main">
+    <!--
+      注意：这里刻意不使用 <transition mode="out-in">。
+      原因：TagsView 会在路由变化的同一 tick 里把新页面加入 cachedViews，
+      keep-alive 的 include 随之变化会打断 out-in 的离场钩子，
+      导致新页面永远停在 enter-from（opacity:0）——表现为「点菜单空白，F5 后才出现」。
+      页面切换直接瞬时替换，更稳也更快。
+    -->
     <router-view v-slot="{ Component, route }">
-      <transition name="fade-transform" mode="out-in">
-        <keep-alive :include="tagsViewStore.cachedViews">
-          <component v-if="!route.meta.link" :is="Component" :key="route.path"/>
-        </keep-alive>
-      </transition>
+      <keep-alive :include="tagsViewStore.cachedViews">
+        <component v-if="!route.meta.link" :is="Component" :key="route.path"/>
+      </keep-alive>
     </router-view>
     <iframe-toggle />
     <copyright />
@@ -37,42 +42,40 @@ function addIframe() {
 
 <style lang="scss" scoped>
 .app-main {
-  /* 50= navbar  50  */
-  min-height: calc(100vh - 50px);
+  /* 56 = navbar */
+  min-height: calc(100vh - var(--ap-nav-h));
   width: 100%;
   position: relative;
   overflow: hidden;
+  background: var(--ap-bg);
 }
 
 .fixed-header + .app-main {
   overflow-y: auto;
   scrollbar-gutter: auto;
-  height: calc(100vh - 50px);
+  height: calc(100vh - var(--ap-nav-h));
   min-height: 0px;
+  margin-top: var(--ap-nav-h);
 }
 
 .app-main:has(.copyright) {
   padding-bottom: 36px;
 }
 
-.fixed-header + .app-main {
-  margin-top: 50px;
-}
-
 .hasTagsView {
   .app-main {
-    /* 84 = navbar + tags-view = 50 + 34 */
-    min-height: calc(100vh - 84px);
+    /* 96 = navbar + tags-view = 56 + 40 */
+    min-height: calc(100vh - var(--ap-nav-h) - var(--ap-tags-h));
   }
 
   .fixed-header + .app-main {
-    margin-top: 84px;
-    height: calc(100vh - 84px);
+    margin-top: calc(var(--ap-nav-h) + var(--ap-tags-h));
+    height: calc(100vh - var(--ap-nav-h) - var(--ap-tags-h));
     min-height: 0px;
   }
 }
 
-/* 移动端fixed-header优化 */
+/* 移动端 fixed-header 优化 */
 @media screen and (max-width: 991px) {
   .fixed-header + .app-main {
     padding-bottom: max(60px, calc(constant(safe-area-inset-bottom) + 40px));
@@ -92,32 +95,37 @@ function addIframe() {
     .fixed-header + .app-main {
       padding-bottom: max(17px, calc(constant(safe-area-inset-bottom) + 10px));
       padding-bottom: max(17px, calc(env(safe-area-inset-bottom) + 10px));
-      height: calc(100svh - 50px);
-      height: calc(100dvh - 50px);
+      height: calc(100svh - var(--ap-nav-h));
+      height: calc(100dvh - var(--ap-nav-h));
     }
 
     .hasTagsView .fixed-header + .app-main {
       padding-bottom: max(17px, calc(constant(safe-area-inset-bottom) + 10px));
       padding-bottom: max(17px, calc(env(safe-area-inset-bottom) + 10px));
-      height: calc(100svh - 84px);
-      height: calc(100dvh - 84px);
+      height: calc(100svh - var(--ap-nav-h) - var(--ap-tags-h));
+      height: calc(100dvh - var(--ap-nav-h) - var(--ap-tags-h));
     }
   }
 }
 </style>
 
 <style lang="scss">
+/* 滚动条交由 apple.scss 统一处理，这里只保留必要的兜底 */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
-  background-color: #f1f1f1;
+  background-color: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background-color: #c0c0c0;
-  border-radius: 3px;
+  background-color: rgba(0, 0, 0, 0.16);
+  border-radius: 8px;
+}
+
+html.dark ::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.2);
 }
 </style>

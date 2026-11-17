@@ -1,6 +1,6 @@
 <template>
-  <div :class="classObj" class="app-wrapper" :style="{ '--current-color': theme, '--current-color-light': theme + '1a', '--current-color-dark-bg': theme + '33' }">
-    <div v-if="device === 'mobile' && sidebar.opened" class="drawer-bg" @click="handleClickOutside"/>
+  <div :class="classObj" class="app-wrapper">
+    <div v-if="device === 'mobile' && sidebar.opened" class="drawer-bg" @click="handleClickOutside" />
     <sidebar v-if="!sidebar.hide" class="sidebar-container" />
     <div :class="{ hasTagsView: needTagsView, sidebarHide: sidebar.hide }" class="main-container">
       <div :class="{ 'fixed-header': fixedHeader }">
@@ -21,7 +21,6 @@ import useAppStore from '@/store/modules/app'
 import useSettingsStore from '@/store/modules/settings'
 
 const settingsStore = useSettingsStore()
-const theme = computed(() => settingsStore.theme)
 const sidebar = computed(() => useAppStore().sidebar)
 const device = computed(() => useAppStore().device)
 const needTagsView = computed(() => settingsStore.tagsView)
@@ -34,7 +33,7 @@ const classObj = computed(() => ({
   mobile: device.value === 'mobile'
 }))
 
-const { width, height } = useWindowSize()
+const { width } = useWindowSize()
 const WIDTH = 992 // refer to Bootstrap's responsive design
 
 watch(() => device.value, () => {
@@ -64,13 +63,13 @@ function setLayout() {
 
 <style lang="scss" scoped>
 @use "@/assets/styles/mixin.scss" as mix;
-@use "@/assets/styles/variables.module.scss" as vars;
 
 .app-wrapper {
   @include mix.clearfix;
   position: relative;
   height: 100%;
   width: 100%;
+  background-color: var(--ap-bg);
 
   &.mobile.openSidebar {
     position: fixed;
@@ -84,8 +83,8 @@ function setLayout() {
 }
 
 .drawer-bg {
-  background: #000;
-  opacity: 0.3;
+  background: rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(6px);
   width: 100%;
   top: 0;
   height: 100%;
@@ -98,12 +97,14 @@ function setLayout() {
   top: 0;
   right: 0;
   z-index: 9;
-  width: calc(100% - #{vars.$base-sidebar-width});
-  transition: width 0.28s;
+  width: calc(100% - var(--ap-sidebar-w));
+  transition: width var(--ap-dur) var(--ap-ease);
+  background: var(--ap-surface);
+  border-bottom: 1px solid var(--ap-hairline);
 }
 
 .hideSidebar .fixed-header {
-  width: calc(100% - 54px);
+  width: calc(100% - var(--ap-sidebar-w-collapsed));
 }
 
 .sidebarHide .fixed-header {

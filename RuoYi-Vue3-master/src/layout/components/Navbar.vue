@@ -1,47 +1,37 @@
 <template>
   <div class="navbar" :class="'nav' + settingsStore.navType">
-    <hamburger id="hamburger-container" :is-active="appStore.sidebar.opened" class="hamburger-container" @toggleClick="toggleSideBar" />
-    <breadcrumb v-if="settingsStore.navType == 1" id="breadcrumb-container" class="breadcrumb-container" />
-    <top-nav v-if="settingsStore.navType == 2" id="topmenu-container" class="topmenu-container" />
-    <template v-if="settingsStore.navType == 3">
-      <logo v-show="settingsStore.sidebarLogo" :collapse="false"></logo>
-      <top-bar id="topbar-container" class="topbar-container" />
-    </template>
+    <div class="navbar-left">
+      <hamburger id="hamburger-container" :is-active="appStore.sidebar.opened" class="hamburger-container" @toggleClick="toggleSideBar" />
+      <breadcrumb v-if="settingsStore.navType == 1" id="breadcrumb-container" class="breadcrumb-container" />
+      <top-nav v-if="settingsStore.navType == 2" id="topmenu-container" class="topmenu-container" />
+      <template v-if="settingsStore.navType == 3">
+        <logo v-show="settingsStore.sidebarLogo" :collapse="false"></logo>
+        <top-bar id="topbar-container" class="topbar-container" />
+      </template>
+    </div>
 
     <div class="right-menu">
       <template v-if="appStore.device !== 'mobile'">
         <header-search id="header-search" class="right-menu-item" />
 
-        <el-tooltip content="源码地址" effect="dark" placement="bottom">
-          <ruo-yi-git id="ruoyi-git" class="right-menu-item hover-effect" />
-        </el-tooltip>
+        <screenfull id="screenfull" class="right-menu-item" />
 
-        <el-tooltip content="文档地址" effect="dark" placement="bottom">
-          <ruo-yi-doc id="ruoyi-doc" class="right-menu-item hover-effect" />
-        </el-tooltip>
+        <div id="theme-switch" class="right-menu-item" @click="toggleTheme" title="主题模式">
+          <svg-icon v-if="settingsStore.isDark" icon-class="sunny" />
+          <svg-icon v-if="!settingsStore.isDark" icon-class="moon" />
+        </div>
 
-        <screenfull id="screenfull" class="right-menu-item hover-effect" />
+        <size-select id="size-select" class="right-menu-item" />
 
-        <el-tooltip content="主题模式" effect="dark" placement="bottom">
-          <div class="right-menu-item hover-effect theme-switch-wrapper" @click="toggleTheme">
-            <svg-icon v-if="settingsStore.isDark" icon-class="sunny" />
-            <svg-icon v-if="!settingsStore.isDark" icon-class="moon" />
-          </div>
-        </el-tooltip>
-
-        <el-tooltip content="布局大小" effect="dark" placement="bottom">
-          <size-select id="size-select" class="right-menu-item hover-effect" />
-        </el-tooltip>
-
-        <el-tooltip content="消息通知" effect="dark" placement="bottom">
-          <header-notice id="header-notice" class="right-menu-item hover-effect" />
-        </el-tooltip>
+        <header-notice id="header-notice" class="right-menu-item" />
       </template>
 
-      <el-dropdown @command="handleCommand" class="avatar-container right-menu-item hover-effect" trigger="hover">
+      <span class="right-menu-divider"></span>
+
+      <el-dropdown @command="handleCommand" class="avatar-container right-menu-item avatar-item" trigger="hover">
         <div class="avatar-wrapper">
           <img :src="userStore.avatar" class="user-avatar" />
-          <span class="user-nickname"> {{ userStore.nickName }} </span>
+          <span class="user-nickname">{{ userStore.nickName }}</span>
         </div>
         <template #dropdown>
           <el-dropdown-menu>
@@ -49,10 +39,10 @@
               <el-dropdown-item>个人中心</el-dropdown-item>
             </router-link>
             <el-dropdown-item command="setLayout" v-if="settingsStore.showSettings">
-                <span>布局设置</span>
+              <span>布局设置</span>
             </el-dropdown-item>
             <el-dropdown-item command="lockScreen">
-                <span>锁定屏幕</span>
+              <span>锁定屏幕</span>
             </el-dropdown-item>
             <el-dropdown-item divided command="logout">
               <span>退出登录</span>
@@ -74,8 +64,6 @@ import Hamburger from '@/components/Hamburger'
 import Screenfull from '@/components/Screenfull'
 import SizeSelect from '@/components/SizeSelect'
 import HeaderSearch from '@/components/HeaderSearch'
-import RuoYiGit from '@/components/RuoYi/Git'
-import RuoYiDoc from '@/components/RuoYi/Doc'
 import useAppStore from '@/store/modules/app'
 import useUserStore from '@/store/modules/user'
 import useLockStore from '@/store/modules/lock'
@@ -159,11 +147,11 @@ async function toggleTheme(event) {
       {
         clipPath: !wasDark ? [...clipPath].reverse() : clipPath
       }, {
-        duration: 650,
-        easing: "cubic-bezier(0.4, 0, 0.2, 1)",
-        fill: "forwards",
-        pseudoElement: !wasDark ? "::view-transition-old(root)" : "::view-transition-new(root)"
-      }
+      duration: 650,
+      easing: "cubic-bezier(0.4, 0, 0.2, 1)",
+      fill: "forwards",
+      pseudoElement: !wasDark ? "::view-transition-old(root)" : "::view-transition-new(root)"
+    }
     )
     await transition.finished
   } catch (error) {
@@ -174,46 +162,55 @@ async function toggleTheme(event) {
 </script>
 
 <style lang='scss' scoped>
-.navbar.nav3 {
-  .hamburger-container {
-    display: none !important;
-  }
-}
-
 .navbar {
-  height: 50px;
-  overflow: hidden;
   position: relative;
-  background: var(--navbar-bg);
-  box-shadow: 0 1px 4px rgba(0, 21, 41, 0.08);
   display: flex;
   align-items: center;
-  // padding: 0 8px;
+  justify-content: space-between;
+  height: var(--ap-nav-h);
+  padding: 0 20px 0 12px;
   box-sizing: border-box;
+  background: var(--navbar-bg);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border: none;
+  box-shadow: none;
+  overflow: hidden;
 
-  .hamburger-container {
-    line-height: 46px;
-    height: 100%;
-    cursor: pointer;
-    transition: background 0.3s;
-    -webkit-tap-highlight-color: transparent;
+  .navbar-left {
     display: flex;
     align-items: center;
+    min-width: 0;
+    gap: 4px;
+  }
+
+  .hamburger-container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    cursor: pointer;
+    color: var(--ap-text-secondary);
+    transition: background-color 0.2s var(--ap-ease), color 0.2s var(--ap-ease);
+    -webkit-tap-highlight-color: transparent;
     flex-shrink: 0;
-    margin-right: 8px;
 
     &:hover {
-      background: rgba(0, 0, 0, 0.025);
+      background: var(--ap-fill);
+      color: var(--ap-text);
     }
   }
 
   .breadcrumb-container {
     flex-shrink: 0;
+    margin-left: 4px;
   }
 
   .topmenu-container {
     position: absolute;
-    left: 50px;
+    left: 56px;
   }
 
   .topbar-container {
@@ -225,11 +222,12 @@ async function toggleTheme(event) {
     margin-left: 8px;
   }
 
+  // ---------------- 右侧操作区 ----------------
   .right-menu {
-    height: 100%;
-    line-height: 50px;
     display: flex;
     align-items: center;
+    gap: 2px;
+    height: 100%;
     margin-left: auto;
 
     &:focus {
@@ -237,69 +235,81 @@ async function toggleTheme(event) {
     }
 
     .right-menu-item {
-      display: inline-block;
-      padding: 0 8px;
-      height: 100%;
-      font-size: 18px;
-      color: #5a5e66;
-      vertical-align: text-bottom;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      font-size: 17px;
+      color: var(--ap-text-secondary);
+      cursor: pointer;
+      transition: background-color 0.2s var(--ap-ease), color 0.2s var(--ap-ease);
 
-      &.hover-effect {
-        cursor: pointer;
-        transition: background 0.3s;
-
-        &:hover {
-          background: rgba(0, 0, 0, 0.025);
-        }
+      &:hover {
+        background: var(--ap-fill);
+        color: var(--ap-text);
       }
 
-      &.theme-switch-wrapper {
-        display: flex;
-        align-items: center;
+      svg {
+        transition: transform 0.3s var(--ap-ease);
+      }
 
-        svg {
-          transition: transform 0.3s;
-          
-          &:hover {
-            transform: scale(1.15);
-          }
-        }
+      &:hover svg {
+        transform: scale(1.06);
       }
     }
+  }
 
-    .avatar-container {
-      margin-right: 0px;
-      padding-right: 0px;
+  .right-menu-divider {
+    width: 1px;
+    height: 18px;
+    margin: 0 10px;
+    background: var(--ap-hairline);
+  }
 
-      .avatar-wrapper {
-        margin-top: 10px;
-        right: 8px;
-        position: relative;
+  .avatar-container {
+    width: auto !important;
+    padding-right: 0;
 
-        .user-avatar {
-          cursor: pointer;
-          width: 30px;
-          height: 30px;
-          margin-right: 8px;
-          border-radius: 50%;
-        }
+    .avatar-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 3px 12px 3px 3px;
+      border-radius: var(--ap-radius-pill);
+      cursor: pointer;
+      transition: background-color 0.2s var(--ap-ease);
 
-        .user-nickname{
-          position: relative;
-          left: 0px;
-          bottom: 10px;
-          font-size: 14px;
-          font-weight: bold;
-        }
-
-        i {
-          cursor: pointer;
-          position: absolute;
-          right: -20px;
-          top: 25px;
-          font-size: 12px;
-        }
+      &:hover {
+        background: var(--ap-fill);
       }
+
+      .user-avatar {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        object-fit: cover;
+        border: 1px solid var(--ap-hairline);
+      }
+
+      .user-nickname {
+        font-size: 13px;
+        font-weight: 500;
+        letter-spacing: -0.01em;
+        color: var(--ap-text);
+        max-width: 120px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        line-height: 1.2;
+      }
+    }
+  }
+
+  &.nav3 {
+    .hamburger-container {
+      display: none !important;
     }
   }
 }

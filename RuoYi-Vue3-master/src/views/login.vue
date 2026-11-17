@@ -31,7 +31,7 @@
           size="large"
           auto-complete="off"
           placeholder="验证码"
-          style="width: 63%"
+          style="width: 62%"
           @keyup.enter="handleLogin"
         >
           <template #prefix><svg-icon icon-class="validCode" class="el-input__icon input-icon" /></template>
@@ -40,27 +40,23 @@
           <img :src="codeUrl" @click="getCode" class="login-code-img"/>
         </div>
       </el-form-item>
-      <el-checkbox v-model="loginForm.rememberMe" style="margin:0px 0px 25px 0px;">记住密码</el-checkbox>
-      <el-form-item style="width:100%;">
+      <el-checkbox v-model="loginForm.rememberMe" class="remember">记住密码</el-checkbox>
+      <el-form-item class="submit-item">
         <el-button
           :loading="loading"
           size="large"
           type="primary"
-          style="width:100%;"
+          class="submit-btn"
           @click.prevent="handleLogin"
         >
           <span v-if="!loading">登 录</span>
           <span v-else>登 录 中...</span>
         </el-button>
-        <div style="float: right;" v-if="register">
+        <div class="register-link" v-if="register">
           <router-link class="link-type" :to="'/register'">立即注册</router-link>
         </div>
       </el-form-item>
     </el-form>
-    <!--  底部  -->
-    <div class="el-login-footer">
-      <span>{{ footerContent }}</span>
-    </div>
   </div>
 </template>
 
@@ -69,10 +65,8 @@ import { getCodeImg } from "@/api/login"
 import Cookies from "js-cookie"
 import { encrypt, decrypt } from "@/utils/jsencrypt"
 import useUserStore from '@/store/modules/user'
-import defaultSettings from '@/settings'
 
 const title = import.meta.env.VITE_APP_TITLE
-const footerContent = defaultSettings.footerContent
 const userStore = useUserStore()
 const route = useRoute()
 const router = useRouter()
@@ -166,74 +160,158 @@ getCookie()
 </script>
 
 <style lang='scss' scoped>
+// ============================================================
+// 登录页 · Apple 风
+// 整屏中性灰 + 居中白卡 + 单一强调蓝
+// ============================================================
 .login {
+  position: relative;
   display: flex;
-  justify-content: center;
   align-items: center;
-  height: 100%;
-  background-image: url("../assets/images/login-background.jpg");
-  background-size: cover;
-}
-.title {
-  margin: 0px auto 30px auto;
-  text-align: center;
-  color: #707070;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 32px 20px;
+  background: var(--ap-bg);
+  overflow: hidden;
+
+  /* 两团极淡的柔光，给纯色底一点层次，不喧宾夺主 */
+  &::before,
+  &::after {
+    content: "";
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(90px);
+    opacity: 0.5;
+    pointer-events: none;
+  }
+
+  &::before {
+    width: 620px;
+    height: 620px;
+    top: -240px;
+    left: 50%;
+    transform: translateX(-72%);
+    background: radial-gradient(circle, rgba(0, 113, 227, 0.16), transparent 68%);
+  }
+
+  &::after {
+    width: 520px;
+    height: 520px;
+    bottom: -220px;
+    right: 4%;
+    background: radial-gradient(circle, rgba(175, 82, 222, 0.1), transparent 68%);
+  }
 }
 
 .login-form {
-  border-radius: 6px;
-  background: #ffffff;
-  width: 400px;
-  padding: 25px 25px 5px 25px;
+  position: relative;
   z-index: 1;
+  width: 384px;
+  max-width: 100%;
+  padding: 44px 40px 36px;
+  background: var(--ap-surface);
+  border: 1px solid var(--ap-hairline);
+  border-radius: var(--ap-radius-xl);
+  box-shadow: var(--ap-shadow-md);
+  box-sizing: border-box;
+
+  .el-form-item {
+    margin-bottom: 18px;
+  }
+
   .el-input {
-    height: 40px;
+    height: 42px;
+
     input {
-      height: 40px;
+      height: 42px;
+      font-size: 15px;
     }
   }
+
   .input-icon {
-    height: 39px;
+    height: 40px;
     width: 14px;
-    margin-left: 0px;
+    margin-left: 0;
+    color: var(--ap-text-quaternary);
+  }
+
+  .el-input__wrapper {
+    height: 42px;
+    border-radius: var(--ap-radius-md);
+    padding: 0 14px;
   }
 }
-.login-tip {
-  font-size: 13px;
+
+.title {
+  margin: 0 0 28px;
   text-align: center;
-  color: #bfbfbf;
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.2;
+  color: var(--ap-text);
 }
-.login-code {
-  width: 33%;
-  height: 40px;
+
+.remember {
+  margin: 0 0 20px 0;
+  height: 22px;
+
+  :deep(.el-checkbox__label) {
+    font-size: 13px;
+    color: var(--ap-text-secondary);
+  }
+}
+
+.submit-item {
+  width: 100%;
+  margin-bottom: 0 !important;
+}
+
+.submit-btn {
+  width: 100%;
+  height: 44px;
+  font-size: 15px;
+  border-radius: var(--ap-radius-md);
+}
+
+.register-link {
   float: right;
+  margin-top: 12px;
+  font-size: 13px;
+}
+
+.login-code {
+  width: 36%;
+  height: 42px;
+  float: right;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+
   img {
     cursor: pointer;
     vertical-align: middle;
   }
 }
-.el-login-footer {
-  height: 40px;
-  line-height: 40px;
-  position: fixed;
-  bottom: 0;
-  width: 100%;
-  text-align: center;
-  color: #fff;
-  font-family: Arial;
-  font-size: 12px;
-  letter-spacing: 1px;
-}
+
 .login-code-img {
-  height: 40px;
-  padding-left: 12px;
+  height: 42px;
+  width: 100%;
+  object-fit: contain;
+  border-radius: var(--ap-radius-md);
+  border: 1px solid var(--ap-hairline);
+  box-sizing: border-box;
+  background: var(--ap-surface-muted);
 }
 
 html.dark .login {
-  background-image: linear-gradient(rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0.55)), url("../assets/images/login-background.jpg");
+  &::before {
+    background: radial-gradient(circle, rgba(10, 132, 255, 0.24), transparent 68%);
+  }
+
   .login-form {
-    background: var(--el-bg-color-overlay) !important;
-    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+    background: var(--ap-surface);
+    box-shadow: var(--ap-shadow-md);
   }
 }
 </style>
