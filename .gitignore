@@ -32,5 +32,6 @@ Thumbs.db
 .workbuddy/*.sse
 .workbuddy/token.txt
 .workbuddy/req*.json
+.workbuddy/*.json
 .workbuddy/parse_sse.py
 .workbuddy/vite-out.txt

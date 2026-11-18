@@ -20,6 +20,11 @@ server:
   servlet:
     # 应用的访问路径
     context-path: /
+    # 强制请求/响应使用 UTF-8，避免中文在 @RequestBody 解码时乱码
+    encoding:
+      charset: UTF-8
+      enabled: true
+      force: true
   tomcat:
     # tomcat的URI编码
     uri-encoding: UTF-8
@@ -53,7 +58,13 @@ ai:
     # 默认模型，可换成 gui-plus / qwen-plus / qwen3.6-plus / deepseek-v4-flash
     # 注意：模型必须在百炼控制台已开通，否则返回 AccessDenied.Unpurchased；
     #      各模型额度独立计算，某个模型报 BudgetLimitExceeded 不代表整体不可用
-    model: gui-plus
+    # 默认模型。
+    # 实测对比（同一份菜单清单 + LangChain4j 记忆）：
+    #   qwen3.8-flash：三轮连续对话（角色/部门/用户）全部命中正确路由
+    #   gui-plus     ：会编造 /system/character，且第二轮锚定回上一轮的菜单
+    # gui-plus 是 GUI agent 专用模型，多轮意图切换能力弱，不适合本场景。
+    # 切换方式：改这里，或启动时加 --ai.assistant.model=gui-plus
+    model: qwen3.8-flash
     # 优先取环境变量，其次由 ai-local.yml 覆盖
     api-key: ${AI_ASSISTANT_API_KEY:}
     # 单次请求超时（秒）

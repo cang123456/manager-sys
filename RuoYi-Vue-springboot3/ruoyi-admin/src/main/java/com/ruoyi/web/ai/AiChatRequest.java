@@ -1,55 +1,39 @@
 package com.ruoyi.web.ai;
 
-import java.util.List;
-import java.util.Map;
-
 /**
- * AI 对话请求体
+ * AI 对话请求
  *
- * 后端只做一个透明代理：不认识任何具体工具，
- * 前端传来什么 messages / tools，就原样转给百炼。
- * 这样以后新增工具只需要改前端的工具注册表，后端不用动。
+ * 相比手写版本，前端不再传 messages / tools：
+ * 记忆由后端按 sessionId 维护，工具定义由后端 ToolSpecification 提供，
+ * 前端只说"我是哪个会话、我这句话是什么"。
  *
  * @author ruoyi
  */
 public class AiChatRequest
 {
-    /** 对话历史，格式同 OpenAI：{role, content} */
-    private List<Map<String, Object>> messages;
+    /** 会话标识，前端生成并持久化（localStorage），用于隔离不同用户的记忆 */
+    private String sessionId;
 
-    /** 工具定义（OpenAI function 格式），可为空 */
-    private List<Map<String, Object>> tools;
+    /** 用户这句话 */
+    private String message;
 
-    /** 覆盖默认模型，可为空 */
-    private String model;
-
-    public List<Map<String, Object>> getMessages()
+    public String getSessionId()
     {
-        return messages;
+        return sessionId;
     }
 
-    public void setMessages(List<Map<String, Object>> messages)
+    public void setSessionId(String sessionId)
     {
-        this.messages = messages;
+        this.sessionId = sessionId;
     }
 
-    public List<Map<String, Object>> getTools()
+    public String getMessage()
     {
-        return tools;
+        return message;
     }
 
-    public void setTools(List<Map<String, Object>> tools)
+    public void setMessage(String message)
     {
-        this.tools = tools;
-    }
-
-    public String getModel()
-    {
-        return model;
-    }
-
-    public void setModel(String model)
-    {
-        this.model = model;
+        this.message = message;
     }
 }

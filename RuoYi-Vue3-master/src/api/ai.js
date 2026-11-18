@@ -1,20 +1,17 @@
 import { getToken } from '@/utils/auth'
 
 /**
- * 调用后端 AI 代理，读取 SSE 流
+ * 调用后端 AI 助手（LangChain4j 版）
  *
- * 后端只做透明转发，每个分片就是百炼原始 chunk 的 JSON 字符串，
- * 这里解析出来直接交给上层，不在这一层做任何业务解释。
- *
- * @param {Object}   options
- * @param {Array}    options.messages 对话历史 [{role, content}]
- * @param {Array}    options.tools    工具定义（OpenAI function 格式）
- * @param {Function} options.onChunk  收到一个分片对象时回调
- * @param {Function} options.onDone   正常结束时回调
- * @param {Function} options.onError  出错时回调
- * @param {AbortSignal} options.signal 用于中止
+ * 协议比手写版简单得多：
+ *   请求只发 { sessionId, message }，记忆与工具定义都在后端
+ *   响应事件只有四种：
+ *     chunk  {text}                                              文字增量
+ *     tool   {model, requestId, toolCalls:[{id,name,arguments}]}  工具调用（参数已由框架拼好）
+ *     done   {}                                                  正常结束
+ *     error  {message}                                           出错
  */
-export async function chatStream({ messages, tools, onChunk, onDone, onError, signal }) {
+export async function chatStream({ sessionId, message, onText, onTool, onDone, onError, signal }) {
   const base = import.meta.env.VITE_APP_BASE_API || ''
   let response
   try {
@@ -24,7 +21,7 @@ export async function chatStream({ messages, tools, onChunk, onDone, onError, si
         'Content-Type': 'application/json;charset=utf-8',
         'Authorization': 'Bearer ' + getToken()
       },
-      body: JSON.stringify({ messages, tools }),
+      body: JSON.stringify({ sessionId, message }),
       signal
     })
   } catch (e) {
@@ -40,18 +37,18 @@ export async function chatStream({ messages, tools, onChunk, onDone, onError, si
   if (!response.ok) {
     throw new Error(`后端返回 HTTP ${response.status}`)
   }
-  // 若依的惯例是 HTTP 200 + 业务码，鉴权失败时返回的是 JSON 而不是 SSE 流
+  // 若依鉴权失败返回 HTTP 200 + JSON，不是 SSE
   const contentType = response.headers.get('content-type') || ''
   if (contentType.includes('application/json')) {
     const text = await response.text()
-    let message = '请求被拒绝'
+    let msg = '请求被拒绝'
     try {
       const body = JSON.parse(text)
-      message = body.msg || message
+      msg = body.msg || msg
     } catch (e) {
-      message = text || message
+      msg = text || msg
     }
-    throw new Error(message)
+    throw new Error(msg)
   }
   if (!response.body) {
     throw new Error('当前浏览器不支持流式读取')
@@ -77,28 +74,51 @@ export async function chatStream({ messages, tools, onChunk, onDone, onError, si
       if (!data) {
         continue
       }
+      let payload
+      try {
+        payload = JSON.parse(data)
+      } catch (e) {
+        continue
+      }
       if (event === 'chunk') {
-        try {
-          onChunk && onChunk(JSON.parse(data))
-        } catch (e) {
-          console.warn('[ai] 分片解析失败', data, e)
-        }
+        onText && onText(payload.text || '')
+      } else if (event === 'tool') {
+        onTool && onTool(payload)
       } else if (event === 'done') {
         onDone && onDone()
       } else if (event === 'error') {
-        let message = '调用失败'
-        try {
-          message = JSON.parse(data).message || message
-        } catch (e) {
-          message = data
-        }
-        onError && onError(new Error(message))
+        onError && onError(new Error(payload.message || '调用失败'))
       }
     }
   }
 }
 
-/** 解析一段 SSE 文本，返回 { event, data } */
+/** 把前端执行工具的结果回报给后端，写入该会话记忆 */
+export async function postToolResult({ sessionId, toolCallId, toolName, result }) {
+  const base = import.meta.env.VITE_APP_BASE_API || ''
+  await fetch(`${base}/ai/tool-result`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json;charset=utf-8',
+      'Authorization': 'Bearer ' + getToken()
+    },
+    body: JSON.stringify({ sessionId, toolCallId, toolName, result })
+  })
+}
+
+/** 清空后端记忆 */
+export async function resetSession(sessionId) {
+  const base = import.meta.env.VITE_APP_BASE_API || ''
+  await fetch(`${base}/ai/reset`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json;charset=utf-8',
+      'Authorization': 'Bearer ' + getToken()
+    },
+    body: JSON.stringify({ sessionId })
+  })
+}
+
 function parseEvent(raw) {
   let event = 'message'
   const dataLines = []

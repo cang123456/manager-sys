@@ -28,6 +28,19 @@ public class AiAssistantProperties
     /** 单次请求超时（秒） */
     private int timeoutSeconds = 120;
 
+    /** 每个会话保留的最近消息条数（LangChain4j 的滑窗记忆） */
+    private int memoryMaxMessages = 12;
+
+    public int getMemoryMaxMessages()
+    {
+        return memoryMaxMessages;
+    }
+
+    public void setMemoryMaxMessages(int memoryMaxMessages)
+    {
+        this.memoryMaxMessages = memoryMaxMessages;
+    }
+
     public String getBaseUrl()
     {
         return baseUrl;

@@ -20,6 +20,7 @@
               <div class="ai-desc">{{ modelLabel }}</div>
             </div>
           </div>
+          <button class="ai-new-btn" title="清空记忆，开始新对话" @click="newSession">新对话</button>
           <button class="ai-icon-btn" title="收起" @click="open = false">✕</button>
         </header>
 
@@ -81,8 +82,8 @@
 
 <script setup>
 import { ref, computed, nextTick } from 'vue'
-import { chatStream } from '@/api/ai'
-import { getToolSchemas, describeToolCall, executeTool, hasTool, buildRouteCatalogText } from '@/utils/aiTools'
+import { chatStream, postToolResult, resetSession } from '@/api/ai'
+import { describeToolCall, executeTool, hasTool } from '@/utils/aiTools'
 
 const open = ref(false)
 const input = ref('')
@@ -96,19 +97,27 @@ const samples = ['打开用户管理', '去角色管理', '回到首页']
 const activeModel = ref('')
 const modelLabel = computed(() => (activeModel.value ? `百炼 ${activeModel.value} · 菜单跳转` : '百炼 · 菜单跳转'))
 
-/** 上一轮成功打开的页面，作为背景写进 system，而不是塞进对话历史 */
-const lastAction = ref(null)
+/** 会话 id：存 localStorage，刷新页面后记忆仍然连续 */
+const SESSION_KEY = 'ai-assistant-session-id'
 
-function buildSystemContent() {
-  const parts = ['你是若依后台的智能助手。用户想切换页面时调用 navigate 工具。始终以用户最后一条消息为准，不要沿用上一轮打开过的菜单。']
-  if (lastAction.value) {
-    parts.push(`背景：用户上一轮打开了 ${lastAction.value.title || '某个页面'}（${lastAction.value.route}）。`)
+function ensureSessionId() {
+  let id = localStorage.getItem(SESSION_KEY)
+  if (!id) {
+    id = 's-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8)
+    localStorage.setItem(SESSION_KEY, id)
   }
-  const catalog = buildRouteCatalogText()
-  if (catalog) {
-    parts.push(catalog)
+  return id
+}
+
+/** 开一个新会话：清空后端记忆 + 界面消息 */
+async function newSession() {
+  const old = localStorage.getItem(SESSION_KEY)
+  if (old) {
+    resetSession(old).catch(() => {})
   }
-  return parts.join('\n\n')
+  localStorage.removeItem(SESSION_KEY)
+  ensureSessionId()
+  messages.value = []
 }
 
 let controller = null
@@ -167,57 +176,27 @@ async function send(preset) {
   messages.value.push({ role: 'assistant', text: '', pending: true, tool: null, result: null })
   const ai = messages.value[messages.value.length - 1]
 
-  /* 只发「system + 当前这一句」，不发对话历史。
-   * 实测（gui-plus）：只要有成对的 user/assistant 历史，模型就会被第一轮锚定，
-   * 说「打开角色管理」它仍返回上一轮的「用户管理」，甚至吐出非法 JSON。
-   * 把上一轮动作压成 system 里一句背景，则既能保留上下文又不会跑偏。 */
-  const payload = [
-    { role: 'system', content: buildSystemContent() },
-    { role: 'user', content }
-  ]
-
   loading.value = true
   aborted = false
   controller = new AbortController()
 
-  const toolStates = {}
-  const rawChunks = []
-  let requestId = ''
-  let modelName = ''
+  let toolEvent = null
   let streamError = null
-  let gotContent = false
+  let gotText = false
 
   try {
     await chatStream({
-      messages: payload,
-      tools: getToolSchemas(),
+      sessionId: ensureSessionId(),
+      message: content,
       signal: controller.signal,
-      onChunk(chunk) {
-        rawChunks.push(chunk)
-        if (chunk.id) requestId = chunk.id
-        if (chunk.model) {
-          modelName = chunk.model
-          activeModel.value = chunk.model
-        }
-
-        const choice = chunk.choices && chunk.choices[0]
-        const delta = choice && choice.delta
-        if (!delta) return
-
-        if (delta.content) {
-          gotContent = true
-          typeInto(ai, delta.content)
-        }
-        if (delta.tool_calls) {
-          for (const call of delta.tool_calls) {
-            const index = call.index || 0
-            if (!toolStates[index]) toolStates[index] = { id: '', name: '', argsText: '' }
-            const state = toolStates[index]
-            if (call.id) state.id = call.id
-            if (call.function && call.function.name) state.name = call.function.name
-            if (call.function && call.function.arguments) state.argsText += call.function.arguments
-          }
-        }
+      onText(text) {
+        if (!text) return
+        gotText = true
+        typeInto(ai, text)
+      },
+      onTool(payload) {
+        toolEvent = payload
+        if (payload.model) activeModel.value = payload.model
       },
       onError(err) {
         streamError = err
@@ -240,48 +219,50 @@ async function send(preset) {
     return
   }
 
-  /* ---------- 处理工具调用 ---------- */
-  const first = toolStates[0]
-  if (first && first.name) {
+  /* ---------- 处理工具调用（参数已由 LangChain4j 拼好，前端不再累加分片） ---------- */
+  const call = toolEvent && toolEvent.toolCalls && toolEvent.toolCalls[0]
+  if (call) {
     let args = {}
     try {
-      args = JSON.parse(first.argsText || '{}')
+      args = JSON.parse(call.arguments || '{}')
     } catch (e) {
       args = {}
     }
 
     ai.tool = {
-      name: first.name,
-      argsText: first.argsText || '(空)',
-      id: first.id,
+      name: call.name,
+      argsText: call.arguments || '(空)',
+      id: call.id,
       showJson: false,
-      raw: buildRawJson({ requestId, modelName, first, rawChunks })
+      raw: JSON.stringify(toolEvent, null, 2)
     }
 
-    // 模型偶尔只发一个空的工具调用，不要拿它拼出「打开「undefined」」这种话
     if (!args || !args.route) {
       typeInto(ai, '模型这次没给出具体页面（参数是空的）。请再说一次要打开哪个菜单，比如「打开角色管理」。')
       return
     }
 
-    typeInto(ai, describeToolCall(first.name, args))
+    typeInto(ai, describeToolCall(call.name, args))
 
-    const result = hasTool(first.name)
-      ? await executeTool(first.name, args)
-      : { ok: false, error: `未注册的工具：${first.name}` }
+    const result = hasTool(call.name)
+      ? await executeTool(call.name, args)
+      : { ok: false, error: `未注册的工具：${call.name}` }
 
-    ai.result = buildResult(result, first.argsText)
+    ai.result = buildResult(result)
 
-    // 只在真的跳成功时记背景，失败的不记，避免把错误页面带进下一轮
-    if (result.ok && result.debug && result.debug.跳转后) {
-      lastAction.value = { route: result.debug.跳转后, title: args.title || first.argsText }
-    }
+    // 把执行结果回报给后端，写进会话记忆（下一轮模型才知道已经跳过了）
+    postToolResult({
+      sessionId: ensureSessionId(),
+      toolCallId: call.id,
+      toolName: call.name,
+      result: result.ok ? `已跳转到 ${result.route}` : `失败：${result.error}`
+    }).catch(() => {})
 
     scrollToBottom()
     return
   }
 
-  if (!gotContent && !ai.text) {
+  if (!gotText && !ai.text) {
     typeInto(ai, '这句话我没听明白。可以说「打开用户管理」这种指定页面的指令。')
   }
 }
@@ -454,6 +435,22 @@ function safeParse(text) {
   background: transparent;
   color: var(--ap-text-secondary, #6e6e73);
   font-size: 13px;
+}
+
+.ai-new-btn {
+  border: 1px solid var(--ap-hairline-strong, rgba(0, 0, 0, 0.14));
+  background: transparent;
+  color: var(--ap-text-secondary, #6e6e73);
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  margin-right: 6px;
+}
+
+.ai-new-btn:hover {
+  color: var(--ap-blue, #0071e3);
+  border-color: var(--ap-blue, #0071e3);
 }
 
 .ai-icon-btn:hover {

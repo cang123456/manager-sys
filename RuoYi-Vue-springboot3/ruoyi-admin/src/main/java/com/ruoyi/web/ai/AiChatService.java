@@ -1,24 +1,12 @@
 package com.ruoyi.web.ai;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.concurrent.CancellationException;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,16 +14,34 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.ruoyi.common.utils.SecurityUtils;
+
+import dev.langchain4j.agent.tool.ToolExecutionRequest;
+import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.SystemMessage;
+import dev.langchain4j.data.message.ToolExecutionResultMessage;
+import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.memory.ChatMemory;
+import dev.langchain4j.memory.chat.MessageWindowChatMemory;
+import dev.langchain4j.model.chat.StreamingChatModel;
+import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
+import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
 
 /**
- * AI 对话服务（百炼透明代理）
+ * AI 助手服务（基于 LangChain4j）
  *
- * 职责只有一件事：把前端的请求转发给百炼，把百炼返回的 SSE 分片原样转回前端。
- * 不解析工具调用、不拼参数、不执行业务动作 —— 这些都在前端做。
+ * 交给框架的三件事：
+ * 1. 对话记忆：MessageWindowChatMemory + 自实现 AiMemoryStore，按 sessionId 隔离
+ * 2. 工具协议：ToolSpecification 声明能力；模型返回 ToolExecutionRequest 时参数已被框架拼好，
+ *    前端不再需要累加 arguments 分片（那是之前最容易出错的地方）
+ * 3. 流式解析：StreamingChatResponseHandler 只暴露 onPartialResponse / onCompleteResponse，
+ *    SSE 分帧、[DONE]、错误包装都在框架内部
  *
- * 前端点「停止」或关闭页面时，会同步取消发往百炼的请求，
- * 避免上游连接悬着不释放（并发打满后会表现为下一次请求 Connection reset）。
+ * 没交出去的是"工具执行"：跳路由是浏览器行为，后端只把 ToolExecutionRequest 下发，
+ * 前端执行完把结果回报进来写进记忆。
  *
  * @author ruoyi
  */
@@ -44,410 +50,303 @@ public class AiChatService
 {
     private static final Logger log = LoggerFactory.getLogger(AiChatService.class);
 
-    /** SSE 连接超时：5 分钟 */
     private static final long SSE_TIMEOUT_MS = 5 * 60 * 1000L;
 
     private final AiAssistantProperties properties;
 
+    private final AiMenuCatalog menuCatalog;
+
+    private final AiMemoryStore memoryStore = new AiMemoryStore();
+
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    private final HttpClient httpClient = HttpClient.newBuilder()
-            // 该域名解析出两个 IPv4，其中一个从本机连接要耗约 2 秒才失败，
-            // JDK 会在这个时间内换下一个地址。4 秒足够走完一次换路，
-            // 又不至于把"连不上"拖成 15 秒的假死。
-            .connectTimeout(Duration.ofSeconds(4))
-            // 强制 HTTP/1.1：SSE 走 HTTP/2 时，部分网关会在流中途重置连接
-            .version(HttpClient.Version.HTTP_1_1)
-            .build();
+    private final StreamingChatModel model;
 
-    /** 转发线程池，避免阻塞 Tomcat 工作线程 */
-    private final ExecutorService forwardPool = Executors.newCachedThreadPool(r -> {
-        Thread t = new Thread(r, "ai-chat-forward");
+    private final ExecutorService pool = Executors.newCachedThreadPool(r -> {
+        Thread t = new Thread(r, "ai-chat");
         t.setDaemon(true);
         return t;
     });
 
-    public AiChatService(AiAssistantProperties properties)
+    /** 模型构建失败（如未配置 key）时的原因，请求时直接回给前端 */
+    private final String initError;
+
+    public AiChatService(AiAssistantProperties properties, AiMenuCatalog menuCatalog)
     {
         this.properties = properties;
+        this.menuCatalog = menuCatalog;
+
+        StreamingChatModel built = null;
+        String error = null;
+        if (properties.getApiKey() == null || properties.getApiKey().isBlank())
+        {
+            error = "未配置百炼 API Key：请在 ai-local.yml 或环境变量 AI_ASSISTANT_API_KEY 中配置";
+        }
+        else
+        {
+            try
+            {
+                built = OpenAiStreamingChatModel.builder()
+                        .baseUrl(properties.getBaseUrl())
+                        .apiKey(properties.getApiKey())
+                        .modelName(properties.getModel())
+                        .timeout(Duration.ofSeconds(properties.getTimeoutSeconds()))
+                        .logRequests(false)
+                        .logResponses(false)
+                        .build();
+            }
+            catch (Exception e)
+            {
+                error = "初始化模型失败：" + e.getMessage();
+                log.error("[AI] 初始化 StreamingChatModel 失败", e);
+            }
+        }
+        this.model = built;
+        this.initError = error;
     }
 
-    /**
-     * 发起一次流式对话，返回给控制器的 SseEmitter
-     */
-    public SseEmitter stream(AiChatRequest request)
+    /** 一轮对话，返回 SSE 流 */
+    public SseEmitter stream(String sessionId, String message, Long userId)
     {
         SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
 
-        if (properties.getApiKey() == null || properties.getApiKey().isBlank())
+        if (model == null)
         {
-            forwardPool.submit(() -> {
-                sendError(emitter, "未配置百炼 API Key：请在 ruoyi-admin/src/main/resources/ai-local.yml 中填写，或设置环境变量 AI_ASSISTANT_API_KEY");
-                emitter.complete();
+            pool.submit(() -> {
+                sendError(emitter, initError);
+                completeQuietly(emitter);
+            });
+            return emitter;
+        }
+        if (sessionId == null || sessionId.isBlank() || message == null || message.isBlank())
+        {
+            pool.submit(() -> {
+                sendError(emitter, "sessionId 或 message 为空");
+                completeQuietly(emitter);
             });
             return emitter;
         }
 
-        forwardPool.submit(() -> forward(request, emitter));
+        pool.submit(() -> run(sessionId, message.trim(), userId, emitter));
         return emitter;
     }
 
-    private void forward(AiChatRequest request, SseEmitter emitter)
+    private void run(String sessionId, String message, Long userId, SseEmitter emitter)
     {
-        String requestBody;
+        ChatMemory memory = memoryOf(sessionId);
         try
         {
-            requestBody = buildBody(request);
+            memory.add(UserMessage.from(message));
+
+            List<ChatMessage> messages = new ArrayList<>();
+            messages.add(SystemMessage.from(buildSystemPrompt(userId)));
+            messages.addAll(fillDanglingToolResults(memory));
+
+            ChatRequest request = ChatRequest.builder()
+                    .messages(messages)
+                    .toolSpecifications(AiToolSpecs.all())
+                    .build();
+
+            model.chat(request, new StreamingChatResponseHandler()
+            {
+                @Override
+                public void onPartialResponse(String partial)
+                {
+                    if (partial == null || partial.isEmpty())
+                    {
+                        return;
+                    }
+                    try
+                    {
+                        Map<String, Object> payload = new LinkedHashMap<>();
+                        payload.put("text", partial);
+                        emitter.send(SseEmitter.event().name("chunk").data(objectMapper.writeValueAsString(payload)));
+                    }
+                    catch (Exception e)
+                    {
+                        log.debug("[AI] 写回前端失败：{}", e.getMessage());
+                    }
+                }
+
+                @Override
+                public void onCompleteResponse(ChatResponse response)
+                {
+                    try
+                    {
+                        AiMessage ai = response.aiMessage();
+                        memory.add(ai);
+
+                        if (ai.hasToolExecutionRequests())
+                        {
+                            emitter.send(SseEmitter.event().name("tool").data(objectMapper.writeValueAsString(toolPayload(response))));
+                        }
+                        emitter.send(SseEmitter.event().name("done").data("{}"));
+                        completeQuietly(emitter);
+                    }
+                    catch (Exception e)
+                    {
+                        log.warn("[AI] 收尾失败：{}", e.getMessage());
+                        completeQuietly(emitter);
+                    }
+                }
+
+                @Override
+                public void onError(Throwable error)
+                {
+                    log.error("[AI] 模型调用失败", error);
+                    sendError(emitter, describeFailure(error));
+                    completeQuietly(emitter);
+                }
+            });
         }
         catch (Exception e)
         {
-            sendError(emitter, "构造请求失败：" + e.getMessage());
-            emitter.complete();
+            log.error("[AI] 对话处理失败", e);
+            sendError(emitter, describeFailure(e));
+            completeQuietly(emitter);
+        }
+    }
+
+    /** 前端执行完工具后回报结果，写进记忆，下一轮模型就知道已经跳过了 */
+    public void addToolResult(String sessionId, String toolCallId, String toolName, String resultText)
+    {
+        if (sessionId == null || sessionId.isBlank())
+        {
             return;
         }
+        memoryOf(sessionId).add(new ToolExecutionResultMessage(toolCallId, toolName,
+                resultText == null || resultText.isBlank() ? "ok" : resultText));
+    }
 
-        String url = trimTrailingSlash(properties.getBaseUrl()) + "/chat/completions";
-        HttpRequest httpRequest = HttpRequest.newBuilder(URI.create(url))
-                .timeout(Duration.ofSeconds(properties.getTimeoutSeconds()))
-                .header("Authorization", "Bearer " + properties.getApiKey())
-                .header("Content-Type", "application/json")
-                .header("Accept", "text/event-stream")
-                .POST(HttpRequest.BodyPublishers.ofString(requestBody, StandardCharsets.UTF_8))
+    /** 清空某个会话的记忆 */
+    public void reset(String sessionId)
+    {
+        memoryStore.deleteMessages(sessionId);
+    }
+
+    public int activeSessions()
+    {
+        return memoryStore.size();
+    }
+
+    private ChatMemory memoryOf(String sessionId)
+    {
+        return MessageWindowChatMemory.builder()
+                .id(sessionId)
+                .maxMessages(properties.getMemoryMaxMessages())
+                .chatMemoryStore(memoryStore)
                 .build();
+    }
 
-        // 前端断开时用来取消上游请求
-        final AtomicReference<CompletableFuture<HttpResponse<InputStream>>> futureRef = new AtomicReference<>();
-        final AtomicReference<InputStream> upstreamRef = new AtomicReference<>();
-        final AtomicBoolean cancelled = new AtomicBoolean(false);
-        /** 标记「是本次代码主动结束的」，用来区分正常收尾与前端中途断开 */
-        final AtomicBoolean normalFinish = new AtomicBoolean(false);
-
-        /** 主动结束：先置标记，再 complete()，保证 onCompletion 里读到的是 true */
-        Runnable finish = () -> {
-            normalFinish.set(true);
-            try
+    /**
+     * 补齐缺失的工具结果
+     *
+     * OpenAI 协议要求：带 tool_calls 的 assistant 消息后面必须跟 tool 消息，
+     * 否则下一次请求直接 400。前端没回报时（关页面、点停止）这里补一条占位。
+     */
+    private List<ChatMessage> fillDanglingToolResults(ChatMemory memory)
+    {
+        List<ChatMessage> list = new ArrayList<>(memory.messages());
+        if (!list.isEmpty() && list.get(list.size() - 1) instanceof AiMessage ai && ai.hasToolExecutionRequests())
+        {
+            for (ToolExecutionRequest request : ai.toolExecutionRequests())
             {
-                emitter.complete();
+                ToolExecutionResultMessage placeholder = new ToolExecutionResultMessage(
+                        request.id(), request.name(), "（前端未回报执行结果）");
+                memory.add(placeholder);
+                list.add(placeholder);
             }
-            catch (Exception ignored)
-            {
-                // 连接可能已经断了，complete() 抛异常不影响后续
-            }
-        };
+        }
+        return list;
+    }
 
-        // 正常收尾：只释放资源，不打「前端断开」的日志
-        Runnable releaseUpstream = () -> {
-            CompletableFuture<HttpResponse<InputStream>> f = futureRef.get();
-            if (f != null && !f.isDone())
+    private String buildSystemPrompt(Long userId)
+    {
+        StringBuilder sb = new StringBuilder();
+        sb.append("你是若依后台的智能助手，帮用户在系统内跳转页面。\n");
+        sb.append("规则：\n");
+        sb.append("1. 用户明确要求打开某个页面时，调用 navigate 工具。\n");
+        sb.append("2. 用户只是在提问、闲聊、或问某个功能怎么用时，直接用文字回答，不要调用工具。\n");
+        sb.append("3. route 必须严格取自下面清单，禁止编造英文变量名。\n");
+        sb.append("4. 始终以用户最新一条消息为准，不要沿用上一轮打开过的菜单。\n");
+        try
+        {
+            String catalog = menuCatalog.textForUser(userId);
+            if (!catalog.isEmpty())
             {
-                f.cancel(true);
-            }
-            closeQuietly(upstreamRef.get());
-        };
-
-        // 异常收尾（前端点停止 / 关页面 / 超时）：取消上游并记一笔
-        Runnable cancelUpstream = () -> {
-            if (cancelled.compareAndSet(false, true))
-            {
-                log.debug("[AI] 前端已断开，已取消上游请求");
-            }
-            releaseUpstream.run();
-        };
-
-        emitter.onCompletion(() -> {
-            if (normalFinish.get())
-            {
-                releaseUpstream.run();
+                sb.append('\n').append(catalog);
             }
             else
             {
-                // 走到这里说明不是我们自己结束的 —— 前端点了停止或关了页面
-                cancelUpstream.run();
+                log.warn("[AI] 菜单清单为空，模型可能编造路由（userId={}）", userId);
             }
-        });
-        emitter.onTimeout(cancelUpstream);
-        emitter.onError(e -> cancelUpstream.run());
-
-        try
-        {
-            HttpResponse<InputStream> response = null;
-            Exception lastFailure = null;
-
-            // 连接池里可能躺着一条「服务端已经关掉、客户端还以为能用」的空闲连接，
-            // 复用它会得到 "HTTP/1.1 header parser received no bytes"。
-            // 这种情况一个字节都还没写回浏览器，重试一次即可，不会重复计费也不会重复输出。
-            for (int attempt = 1; attempt <= 3 && response == null; attempt++)
-            {
-                try
-                {
-                    CompletableFuture<HttpResponse<InputStream>> future = httpClient.sendAsync(
-                            httpRequest, HttpResponse.BodyHandlers.ofInputStream());
-                    futureRef.set(future);
-                    response = future.get(properties.getTimeoutSeconds(), TimeUnit.SECONDS);
-                }
-                catch (ExecutionException e)
-                {
-                    lastFailure = e.getCause() instanceof Exception ? (Exception) e.getCause() : e;
-                    if (attempt < 3 && isRetryable(lastFailure))
-                    {
-                        log.warn("[AI] 第 {} 次连接失败，重试：{}", attempt, lastFailure.getMessage());
-                        continue;
-                    }
-                    throw lastFailure;
-                }
-            }
-
-            if (response == null)
-            {
-                throw lastFailure == null ? new IOException("未知原因未能建立连接") : lastFailure;
-            }
-
-            upstreamRef.set(response.body());
-
-            if (cancelled.get())
-            {
-                closeQuietly(response.body());
-                return;
-            }
-
-            if (response.statusCode() != 200)
-            {
-                String detail = readSafely(response.body());
-                log.warn("[AI] 百炼返回 HTTP {}: {}", response.statusCode(), detail);
-                sendError(emitter, describeHttpError(response.statusCode(), detail));
-                finish.run();
-                return;
-            }
-
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(response.body(), StandardCharsets.UTF_8)))
-            {
-                String line;
-                while ((line = reader.readLine()) != null)
-                {
-                    if (cancelled.get())
-                    {
-                        log.debug("[AI] 已取消，停止读取上游");
-                        return;
-                    }
-                    if (line.isEmpty() || !line.startsWith("data:"))
-                    {
-                        continue;
-                    }
-                    String data = line.substring(5).trim();
-                    if ("[DONE]".equals(data))
-                    {
-                        break;
-                    }
-                    sendEvent(emitter, "chunk", data);
-                }
-            }
-
-            sendEvent(emitter, "done", "{}");
-            finish.run();
-        }
-        catch (CancellationException e)
-        {
-            log.debug("[AI] 上游请求已被取消");
-            finish.run();
-        }
-        catch (TimeoutException e)
-        {
-            log.warn("[AI] 等待百炼响应超时（{}s）", properties.getTimeoutSeconds());
-            sendError(emitter, "调用超时（" + properties.getTimeoutSeconds() + "s），模型可能正在排队，稍后重试");
-            finish.run();
-        }
-        catch (IllegalStateException e)
-        {
-            // 前端主动断开（点了停止 / 关掉页面），属正常情况
-            log.debug("[AI] 客户端已断开: {}", e.getMessage());
-            cancelUpstream.run();
-            finish.run();
-        }
-        catch (InterruptedException e)
-        {
-            Thread.currentThread().interrupt();
-            cancelUpstream.run();
-            finish.run();
-        }
-        catch (ClientGoneException e)
-        {
-            // 写回浏览器失败：前端点了停止或关了页面
-            log.debug("[AI] 写回前端失败，判定为前端已断开: {}", e.getCause() == null ? "" : e.getCause().getMessage());
-            cancelUpstream.run();
         }
         catch (Exception e)
         {
-            if (cancelled.get())
-            {
-                // 是取消导致的读失败，不算错误
-                log.debug("[AI] 读取上游被中断（取消导致）");
-                return;
-            }
-            log.error("[AI] 转发百炼失败，url={}", url, e);
-            sendError(emitter, describeFailure(e));
-            finish.run();
+            log.warn("[AI] 读取菜单清单失败：{}", e.getMessage());
         }
+        return sb.toString();
     }
 
-    /** 把底层异常翻译成用户能看懂的一句话，同时保留原始类型便于排查 */
-    private String describeFailure(Exception e)
+    private Map<String, Object> toolPayload(ChatResponse response)
     {
-        String name = e.getClass().getSimpleName();
-        String msg = e.getMessage() == null ? "" : e.getMessage();
+        List<Map<String, Object>> calls = new ArrayList<>();
+        for (ToolExecutionRequest request : response.aiMessage().toolExecutionRequests())
+        {
+            Map<String, Object> one = new LinkedHashMap<>();
+            one.put("id", request.id());
+            one.put("name", request.name());
+            one.put("arguments", request.arguments());
+            calls.add(one);
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("model", response.modelName());
+        payload.put("requestId", response.id());
+        payload.put("toolCalls", calls);
+        return payload;
+    }
+
+    private String describeFailure(Throwable error)
+    {
+        String msg = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
+        if (msg.contains("BudgetLimitExceeded") || msg.contains("budget"))
+        {
+            return "百炼预算已用尽：请到控制台『预算管理』提高或重置预算后再试";
+        }
+        if (msg.contains("AccessDenied"))
+        {
+            return "当前账号未开通该模型";
+        }
         if (msg.contains("connect timed out") || msg.contains("Connection refused"))
         {
-            return "连不上百炼（网络连接超时，已自动重试 3 次）。请稍等片刻再试；若持续出现，检查本机网络或代理";
+            return "连不上百炼（网络连接超时），请稍后再试";
         }
-        if (name.contains("Timeout") || msg.contains("timed out"))
-        {
-            return "等待模型响应超时（" + properties.getTimeoutSeconds() + "s），模型可能正在排队，稍后重试";
-        }
-        if (msg.contains("Connection reset") || msg.contains("closed") || msg.contains("aborted"))
-        {
-            return "与百炼的连接被中断。若你刚点过「停止」，稍等几秒再试；反复出现请检查该 workspace 的并发配额";
-        }
-        if (msg.contains("401") || msg.contains("Unauthorized"))
-        {
-            return "百炼鉴权失败，检查 ai-local.yml 里的 api-key 是否有效";
-        }
-        return "调用失败：" + (msg.isEmpty() ? name : msg);
-    }
-
-    private String buildBody(AiChatRequest request) throws Exception
-    {
-        ObjectNode node = objectMapper.createObjectNode();
-        node.put("model", request.getModel() != null && !request.getModel().isBlank() ? request.getModel() : properties.getModel());
-        node.put("stream", true);
-        node.set("messages", objectMapper.valueToTree(
-                request.getMessages() == null ? java.util.List.of() : request.getMessages()));
-        if (request.getTools() != null && !request.getTools().isEmpty())
-        {
-            node.set("tools", objectMapper.valueToTree(request.getTools()));
-        }
-        return objectMapper.writeValueAsString(node);
-    }
-
-    private String readSafely(InputStream in)
-    {
-        try (InputStream stream = in)
-        {
-            return new String(stream.readAllBytes(), StandardCharsets.UTF_8);
-        }
-        catch (Exception e)
-        {
-            return "（读取错误内容失败：" + e.getMessage() + "）";
-        }
-    }
-
-    private static void closeQuietly(InputStream in)
-    {
-        if (in == null)
-        {
-            return;
-        }
-        try
-        {
-            in.close();
-        }
-        catch (IOException ignored)
-        {
-            // 关闭失败无需处理
-        }
+        return "调用失败：" + msg;
     }
 
     private void sendError(SseEmitter emitter, String message)
     {
         try
         {
-            ObjectNode node = objectMapper.createObjectNode();
-            node.put("message", message);
-            emitter.send(SseEmitter.event().name("error").data(objectMapper.writeValueAsString(node)));
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("message", message);
+            emitter.send(SseEmitter.event().name("error").data(objectMapper.writeValueAsString(payload)));
         }
         catch (Exception ignored)
         {
-            // 连接已断，忽略
+            // 连接已断
         }
     }
 
-    private static String trimTrailingSlash(String url)
-    {
-        if (url == null)
-        {
-            return "";
-        }
-        return url.endsWith("/") ? url.substring(0, url.length() - 1) : url;
-    }
-
-    /** 把百炼的 HTTP 错误体翻译成能直接照做的提示 */
-    private static String describeHttpError(int status, String detail)
-    {
-        if (detail.contains("BudgetLimitExceeded"))
-        {
-            return "百炼预算已用尽：请到百炼控制台『预算管理』提高或重置预算后再试";
-        }
-        if (detail.contains("AccessDenied.Unpurchased") || detail.contains("AccessDenied"))
-        {
-            return "当前账号未开通该模型：" + extractMessage(detail);
-        }
-        if (detail.contains("model_not_found") || detail.contains("Model not exist"))
-        {
-            return "模型不存在，请检查 application.yml 里的 ai.assistant.model";
-        }
-        if (detail.contains("Arrearage") || detail.contains("欠费"))
-        {
-            return "百炼账号欠费，请先充值";
-        }
-        return "百炼返回 HTTP " + status + "：" + extractMessage(detail);
-    }
-
-    /** 从 {"error":{"message":"..."}} 里取 message，取不到就原样返回 */
-    private static String extractMessage(String detail)
-    {
-        int idx = detail.indexOf("\"message\":\"");
-        if (idx < 0)
-        {
-            return detail;
-        }
-        int start = idx + 11;
-        int end = detail.indexOf('"', start);
-        return end > start ? detail.substring(start, end) : detail;
-    }
-
-    /** 只对「连接阶段就失败、还没产生任何输出」的错误重试 */
-    private static boolean isRetryable(Exception e)
-    {
-        String msg = e.getMessage() == null ? "" : e.getMessage();
-        return msg.contains("header parser received no bytes")
-                || msg.contains("Connection reset")
-                || msg.contains("Connection refused")
-                || msg.contains("connect timed out")
-                || msg.contains("closed");
-    }
-
-    /**
-     * 写回浏览器。失败说明前端已经断开 —— 与「上游调用失败」区分开，
-     * 否则会被当成百炼故障，取消逻辑永远不会执行。
-     * 注意：Windows 下 Tomcat 抛的是 IOException(WSAECONNABORTED)，不是 IllegalStateException。
-     */
-    private static void sendEvent(SseEmitter emitter, String event, String data)
+    private void completeQuietly(SseEmitter emitter)
     {
         try
         {
-            emitter.send(SseEmitter.event().name(event).data(data));
+            emitter.complete();
         }
-        catch (Exception e)
+        catch (Exception ignored)
         {
-            throw new ClientGoneException(e);
-        }
-    }
-
-    /** 前端已断开 */
-    private static class ClientGoneException extends RuntimeException
-    {
-        ClientGoneException(Throwable cause)
-        {
-            super(cause);
+            // 已经完成
         }
     }
 }

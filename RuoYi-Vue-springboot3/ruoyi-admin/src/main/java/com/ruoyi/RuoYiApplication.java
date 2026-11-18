@@ -19,6 +19,17 @@ public class RuoYiApplication
         // java.net.ConnectException: HTTP connect timed out。
         // 这里强制走 IPv4 规避；若将来必须用 IPv6，删掉这一行即可。
         System.setProperty("java.net.preferIPv4Stack", "true");
+
+        // JDK 17 在 Windows 上默认编码是 GBK，LangChain4j 的 HTTP 客户端按默认编码
+        // 解码大模型的流式响应，中文会变成「瑙掕壊绠＄悊」这种乱码。
+        // 必须在任何 Charset 初始化之前设置，所以放在 main 第一行附近。
+        System.setProperty("file.encoding", "UTF-8");
+        if (!"UTF-8".equalsIgnoreCase(java.nio.charset.Charset.defaultCharset().name()))
+        {
+            System.err.println("[WARN] 当前 JVM 默认编码为 " + java.nio.charset.Charset.defaultCharset()
+                    + "，中文可能乱码；请在启动参数中加 -Dfile.encoding=UTF-8");
+        }
+
         // System.setProperty("spring.devtools.restart.enabled", "false");
         SpringApplication.run(RuoYiApplication.class, args);
         System.out.println("(♥◠‿◠)ﾉﾞ  若依启动成功   ლ(´ڡ`ლ)ﾞ  \n" +
