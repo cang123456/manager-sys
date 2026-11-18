@@ -1,6 +1,52 @@
 import router from '@/router'
 
 /**
+ * 当前账号真实可访问的菜单列表
+ *
+ * 模型不可能天生知道本系统的路由约定（实测 gui-plus 会编出 "userManage" 这种假路由），
+ * 所以必须把真实清单交给它，而不是让它猜。
+ */
+export function getRouteCatalog() {
+  const list = []
+  const seen = new Set()
+  for (const route of router.getRoutes()) {
+    const meta = route.meta || {}
+    const path = route.path || ''
+    if (!path || path.includes(':') || !meta.title) {
+      continue
+    }
+    if (seen.has(path)) {
+      continue
+    }
+    seen.add(path)
+    list.push({ path, title: String(meta.title) })
+  }
+  return list.sort((a, b) => a.path.localeCompare(b.path))
+}
+
+/** 拼成给模型的清单文本 */
+export function buildRouteCatalogText() {
+  const list = getRouteCatalog()
+  if (!list.length) {
+    return ''
+  }
+  return '当前账号可访问的菜单如下（route 只能取这里的值，禁止自行编造、禁止写英文变量名）：\n'
+    + list.map(item => `- ${item.path}  ${item.title}`).join('\n')
+}
+
+/** 按标题反查路由，用于模型给了假路由时的兜底 */
+function findByTitle(title) {
+  const key = String(title || '').trim()
+  if (!key) {
+    return null
+  }
+  const list = getRouteCatalog()
+  return list.find(item => item.title === key)
+    || list.find(item => item.title.includes(key) || key.includes(item.title))
+    || null
+}
+
+/**
  * AI 助手的工具注册表
  *
  * 这里是唯一的扩展点：以后要加"打开弹窗""切主题""查数据"，
@@ -17,13 +63,13 @@ const toolRegistry = {
       type: 'function',
       function: {
         name: 'navigate',
-        description: '跳转到系统内的某个菜单页面。当用户说「去/打开/看看 某某 页面」「回到首页」时调用。只能使用系统里真实存在的路由，不要自己编造。',
+        description: '跳转到系统内的某个菜单页面。route 必须严格取自系统提供的菜单清单，不能自己编造。',
         parameters: {
           type: 'object',
           properties: {
             route: {
               type: 'string',
-              description: '路由路径，必须以 / 开头，例如 /system/user（用户管理）、/system/role（角色管理）、/system/menu（菜单管理）、/index（首页）'
+              description: '路由路径，必须来自菜单清单，例如 /system/user（用户管理）、/index（首页）'
             },
             title: {
               type: 'string',
@@ -42,11 +88,21 @@ const toolRegistry = {
       }
       const target = raw.startsWith('/') ? raw : '/' + raw
       const resolved = router.resolve(target)
-      if (!resolved || !resolved.matched || resolved.matched.length === 0) {
-        throw new Error(`路由 ${target} 不存在，或当前账号没有该菜单权限`)
+      const matched = resolved && resolved.matched && resolved.matched.length > 0
+
+      if (matched) {
+        await router.push(target)
+        return { ok: true, route: target }
       }
-      await router.push(target)
-      return { ok: true, route: target }
+
+      // 兜底：模型给了假路由（如 userManage），用中文名反查真实路径
+      const fallback = findByTitle(args.title)
+      if (fallback) {
+        await router.push(fallback.path)
+        return { ok: true, route: fallback.path, corrected: true }
+      }
+
+      throw new Error(`路由 ${target} 不存在，且按名称「${args.title || '空'}」也没找到对应菜单`)
     }
   }
 }

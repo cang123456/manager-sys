@@ -78,7 +78,7 @@
 <script setup>
 import { ref, computed, nextTick } from 'vue'
 import { chatStream } from '@/api/ai'
-import { getToolSchemas, describeToolCall, executeTool, hasTool } from '@/utils/aiTools'
+import { getToolSchemas, describeToolCall, executeTool, hasTool, buildRouteCatalogText } from '@/utils/aiTools'
 
 const open = ref(false)
 const input = ref('')
@@ -153,6 +153,12 @@ async function send(preset) {
     .map(m => ({ role: m.role, content: m.text }))
     .slice(-10)
 
+  // 把当前账号真实可访问的菜单清单塞进系统消息，避免模型编造假路由
+  const catalog = buildRouteCatalogText()
+  const payload = catalog
+    ? [{ role: 'system', content: '你是若依后台的智能助手。用户想切换页面时调用 navigate 工具。\n\n' + catalog }, ...history]
+    : history
+
   loading.value = true
   aborted = false
   controller = new AbortController()
@@ -166,7 +172,7 @@ async function send(preset) {
 
   try {
     await chatStream({
-      messages: history,
+      messages: payload,
       tools: getToolSchemas(),
       signal: controller.signal,
       onChunk(chunk) {
