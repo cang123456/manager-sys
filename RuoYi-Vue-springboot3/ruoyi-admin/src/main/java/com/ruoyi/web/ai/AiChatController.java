@@ -1,6 +1,5 @@
 package com.ruoyi.web.ai;
 
-import java.util.LinkedHashMap;
 import java.util.Map;
 
 import org.springframework.http.MediaType;
@@ -69,9 +68,7 @@ public class AiChatController
     @GetMapping("/status")
     public AjaxResult status()
     {
-        Map<String, Object> data = new LinkedHashMap<>();
-        data.put("activeSessions", aiChatService.activeSessions());
-        return AjaxResult.success(data);
+        return AjaxResult.success(aiChatService.storageInfo());
     }
 
     private static String str(Object value)

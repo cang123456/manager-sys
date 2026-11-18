@@ -8,13 +8,15 @@ import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.store.memory.chat.ChatMemoryStore;
 
 /**
- * 会话记忆存储
+ * 会话记忆存放在进程内（ConcurrentHashMap）
  *
- * LangChain4j 只带了一个单槽位的 SingleSlotChatMemoryStore，多用户多会话不够用，
- * 这里用 ConcurrentHashMap 按 sessionId 存，并做 2 小时的空闲回收。
+ * key 是 MemoryKey(userId, sessionId)，值是该会话最近若干条消息。
+ * 空闲超过 2 小时由 purgeExpired() 回收。
  *
- * 之所以放在内存里：菜单跳转这种助手不需要跨重启保留历史；
- * 以后要持久化，把这里换成 Redis（若依现成有）即可，接口不用改。
+ * 这是 ai.assistant.memory-store=memory 时使用的实现，适合本地调试，
+ * 或缺 Redis 的临时环境。生产默认走 RedisChatMemoryStore：
+ * 进程重启不丢、多实例共享。两者都只实现 ChatMemoryStore 的三个方法，
+ * 换实现不影响 AiChatService 的任何逻辑。
  *
  * @author ruoyi
  */

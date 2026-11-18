@@ -31,6 +31,17 @@ public class AiAssistantProperties
     /** 每个会话保留的最近消息条数（LangChain4j 的滑窗记忆） */
     private int memoryMaxMessages = 12;
 
+    /**
+     * 会话记忆的存储方式：redis（默认）或 memory
+     *
+     * redis ：跨重启保留、多实例共享（生产用）
+     * memory：进程内 Map，重启即丢（本地调试、没有 Redis 时用）
+     */
+    private String memoryStore = "redis";
+
+    /** 会话记忆在 Redis 里的存活时间（小时），默认 72 小时 */
+    private int memoryTtlHours = 72;
+
     public int getMemoryMaxMessages()
     {
         return memoryMaxMessages;
@@ -39,6 +50,26 @@ public class AiAssistantProperties
     public void setMemoryMaxMessages(int memoryMaxMessages)
     {
         this.memoryMaxMessages = memoryMaxMessages;
+    }
+
+    public String getMemoryStore()
+    {
+        return memoryStore;
+    }
+
+    public void setMemoryStore(String memoryStore)
+    {
+        this.memoryStore = memoryStore;
+    }
+
+    public int getMemoryTtlHours()
+    {
+        return memoryTtlHours;
+    }
+
+    public void setMemoryTtlHours(int memoryTtlHours)
+    {
+        this.memoryTtlHours = memoryTtlHours;
     }
 
     public String getBaseUrl()

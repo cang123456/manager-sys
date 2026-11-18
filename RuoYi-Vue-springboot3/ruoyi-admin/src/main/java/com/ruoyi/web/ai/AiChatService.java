@@ -30,6 +30,7 @@ import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
+import dev.langchain4j.store.memory.chat.ChatMemoryStore;
 
 /**
  * AI 助手服务（基于 LangChain4j）
@@ -60,7 +61,7 @@ public class AiChatService
 
     private final AiMenuCatalog menuCatalog;
 
-    private final AiMemoryStore memoryStore = new AiMemoryStore();
+    private final ChatMemoryStore memoryStore;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -75,10 +76,11 @@ public class AiChatService
     /** 模型构建失败（如未配置 key）时的原因，请求时直接回给前端 */
     private final String initError;
 
-    public AiChatService(AiAssistantProperties properties, AiMenuCatalog menuCatalog)
+    public AiChatService(AiAssistantProperties properties, AiMenuCatalog menuCatalog, ChatMemoryStore memoryStore)
     {
         this.properties = properties;
         this.menuCatalog = menuCatalog;
+        this.memoryStore = memoryStore;
 
         StreamingChatModel built = null;
         String error = null;
@@ -244,9 +246,14 @@ public class AiChatService
         memoryStore.deleteMessages(new MemoryKey(userId, sessionId));
     }
 
-    public int activeSessions()
+    /** 记忆存储信息，排查用 */
+    public Map<String, Object> storageInfo()
     {
-        return memoryStore.size();
+        Map<String, Object> info = new LinkedHashMap<>();
+        info.put("storage", memoryStore.getClass().getSimpleName());
+        info.put("ttlHours", properties.getMemoryTtlHours());
+        info.put("maxMessages", properties.getMemoryMaxMessages());
+        return info;
     }
 
     /**
