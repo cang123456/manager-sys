@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -51,6 +52,9 @@ public class AiChatService
     private static final Logger log = LoggerFactory.getLogger(AiChatService.class);
 
     private static final long SSE_TIMEOUT_MS = 5 * 60 * 1000L;
+
+    /** sessionId 由前端生成，只允许字母数字下划线短横，长度 8~64，防止脏 key 把内存撑爆 */
+    private static final Pattern SESSION_ID_PATTERN = Pattern.compile("^[A-Za-z0-9_-]{8,64}$");
 
     private final AiAssistantProperties properties;
 
@@ -129,10 +133,10 @@ public class AiChatService
             });
             return emitter;
         }
-        if (sessionId == null || sessionId.isBlank() || message == null || message.isBlank())
+        if (userId == null || !isValidSessionId(sessionId) || message == null || message.isBlank())
         {
             pool.submit(() -> {
-                sendError(emitter, "sessionId 或 message 为空");
+                sendError(emitter, "userId / sessionId 不合法，或 message 为空");
                 completeQuietly(emitter);
             });
             return emitter;
@@ -144,7 +148,8 @@ public class AiChatService
 
     private void run(String sessionId, String message, Long userId, SseEmitter emitter)
     {
-        ChatMemory memory = memoryOf(sessionId);
+        ChatMemory memory = memoryOf(userId, sessionId);
+        log.debug("[AI] 会话记忆 key = {}", new MemoryKey(userId, sessionId));
         try
         {
             memory.add(UserMessage.from(message));
@@ -219,20 +224,24 @@ public class AiChatService
     }
 
     /** 前端执行完工具后回报结果，写进记忆，下一轮模型就知道已经跳过了 */
-    public void addToolResult(String sessionId, String toolCallId, String toolName, String resultText)
+    public void addToolResult(Long userId, String sessionId, String toolCallId, String toolName, String resultText)
     {
-        if (sessionId == null || sessionId.isBlank())
+        if (userId == null || !isValidSessionId(sessionId))
         {
             return;
         }
-        memoryOf(sessionId).add(new ToolExecutionResultMessage(toolCallId, toolName,
+        memoryOf(userId, sessionId).add(new ToolExecutionResultMessage(toolCallId, toolName,
                 resultText == null || resultText.isBlank() ? "ok" : resultText));
     }
 
     /** 清空某个会话的记忆 */
-    public void reset(String sessionId)
+    public void reset(Long userId, String sessionId)
     {
-        memoryStore.deleteMessages(sessionId);
+        if (userId == null || !isValidSessionId(sessionId))
+        {
+            return;
+        }
+        memoryStore.deleteMessages(new MemoryKey(userId, sessionId));
     }
 
     public int activeSessions()
@@ -240,13 +249,25 @@ public class AiChatService
         return memoryStore.size();
     }
 
-    private ChatMemory memoryOf(String sessionId)
+    /**
+     * 取某个用户某个会话的记忆
+     *
+     * key 是 (userId, sessionId) 复合值，userId 来自 JWT，客户端改不了。
+     * 别人拿着你的 sessionId 来请求时，拼出来的是他自己的一条空会话 ——
+     * 既读不到数据，也无法探测这个 sessionId 是否存在（所以不用返回 403）。
+     */
+    private ChatMemory memoryOf(Long userId, String sessionId)
     {
         return MessageWindowChatMemory.builder()
-                .id(sessionId)
+                .id(new MemoryKey(userId, sessionId))
                 .maxMessages(properties.getMemoryMaxMessages())
                 .chatMemoryStore(memoryStore)
                 .build();
+    }
+
+    private static boolean isValidSessionId(String sessionId)
+    {
+        return sessionId != null && SESSION_ID_PATTERN.matcher(sessionId).matches();
     }
 
     /**

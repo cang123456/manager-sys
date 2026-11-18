@@ -47,7 +47,10 @@ public class AiChatController
     @PostMapping("/tool-result")
     public AjaxResult toolResult(@RequestBody Map<String, Object> body)
     {
+        // 同样必须在请求线程取 userId：记忆 key 是 (userId, sessionId)
+        Long userId = SecurityUtils.getUserId();
         aiChatService.addToolResult(
+                userId,
                 str(body.get("sessionId")),
                 str(body.get("toolCallId")),
                 str(body.get("toolName")),
@@ -58,7 +61,8 @@ public class AiChatController
     @PostMapping("/reset")
     public AjaxResult reset(@RequestBody AiChatRequest request)
     {
-        aiChatService.reset(request.getSessionId());
+        Long userId = SecurityUtils.getUserId();
+        aiChatService.reset(userId, request.getSessionId());
         return AjaxResult.success();
     }
 
