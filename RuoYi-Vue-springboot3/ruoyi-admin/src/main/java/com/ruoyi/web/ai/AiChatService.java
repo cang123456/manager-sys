@@ -12,6 +12,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -166,11 +167,38 @@ public class AiChatService
 
         try
         {
-            CompletableFuture<HttpResponse<InputStream>> future = httpClient.sendAsync(
-                    httpRequest, HttpResponse.BodyHandlers.ofInputStream());
-            futureRef.set(future);
+            HttpResponse<InputStream> response = null;
+            Exception lastFailure = null;
 
-            HttpResponse<InputStream> response = future.get(properties.getTimeoutSeconds(), TimeUnit.SECONDS);
+            // 连接池里可能躺着一条「服务端已经关掉、客户端还以为能用」的空闲连接，
+            // 复用它会得到 "HTTP/1.1 header parser received no bytes"。
+            // 这种情况一个字节都还没写回浏览器，重试一次即可，不会重复计费也不会重复输出。
+            for (int attempt = 1; attempt <= 2 && response == null; attempt++)
+            {
+                try
+                {
+                    CompletableFuture<HttpResponse<InputStream>> future = httpClient.sendAsync(
+                            httpRequest, HttpResponse.BodyHandlers.ofInputStream());
+                    futureRef.set(future);
+                    response = future.get(properties.getTimeoutSeconds(), TimeUnit.SECONDS);
+                }
+                catch (ExecutionException e)
+                {
+                    lastFailure = e.getCause() instanceof Exception ? (Exception) e.getCause() : e;
+                    if (attempt == 1 && isRetryable(lastFailure))
+                    {
+                        log.warn("[AI] 与百炼的连接不可用，重试一次：{}", lastFailure.getMessage());
+                        continue;
+                    }
+                    throw lastFailure;
+                }
+            }
+
+            if (response == null)
+            {
+                throw lastFailure == null ? new IOException("未知原因未能建立连接") : lastFailure;
+            }
+
             upstreamRef.set(response.body());
 
             if (cancelled.get())
@@ -342,6 +370,16 @@ public class AiChatService
             return "";
         }
         return url.endsWith("/") ? url.substring(0, url.length() - 1) : url;
+    }
+
+    /** 只对「连接阶段就失败、还没产生任何输出」的错误重试 */
+    private static boolean isRetryable(Exception e)
+    {
+        String msg = e.getMessage() == null ? "" : e.getMessage();
+        return msg.contains("header parser received no bytes")
+                || msg.contains("Connection reset")
+                || msg.contains("Connection refused")
+                || msg.contains("closed");
     }
 
     /**
