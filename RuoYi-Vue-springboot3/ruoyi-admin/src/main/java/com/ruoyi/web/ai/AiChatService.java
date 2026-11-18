@@ -211,7 +211,7 @@ public class AiChatService
             {
                 String detail = readSafely(response.body());
                 log.warn("[AI] 百炼返回 HTTP {}: {}", response.statusCode(), detail);
-                sendError(emitter, "百炼返回 HTTP " + response.statusCode() + "：" + detail);
+                sendError(emitter, describeHttpError(response.statusCode(), detail));
                 finish.run();
                 return;
             }
@@ -292,9 +292,14 @@ public class AiChatService
     {
         String name = e.getClass().getSimpleName();
         String msg = e.getMessage() == null ? "" : e.getMessage();
+        if (msg.contains("connect timed out") || msg.contains("Connection refused"))
+        {
+            return "连不上百炼（TCP 连接失败）。若本机 IPv6 不可达而域名有 AAAA 记录，"
+                    + "JDK 不会自动回退 IPv4，需加 JVM 参数 -Djava.net.preferIPv4Stack=true";
+        }
         if (name.contains("Timeout") || msg.contains("timed out"))
         {
-            return "调用超时（" + properties.getTimeoutSeconds() + "s），模型可能正在排队，稍后重试";
+            return "等待模型响应超时（" + properties.getTimeoutSeconds() + "s），模型可能正在排队，稍后重试";
         }
         if (msg.contains("Connection reset") || msg.contains("closed") || msg.contains("aborted"))
         {
@@ -370,6 +375,41 @@ public class AiChatService
             return "";
         }
         return url.endsWith("/") ? url.substring(0, url.length() - 1) : url;
+    }
+
+    /** 把百炼的 HTTP 错误体翻译成能直接照做的提示 */
+    private static String describeHttpError(int status, String detail)
+    {
+        if (detail.contains("BudgetLimitExceeded"))
+        {
+            return "百炼预算已用尽：请到百炼控制台『预算管理』提高或重置预算后再试";
+        }
+        if (detail.contains("AccessDenied.Unpurchased") || detail.contains("AccessDenied"))
+        {
+            return "当前账号未开通该模型：" + extractMessage(detail);
+        }
+        if (detail.contains("model_not_found") || detail.contains("Model not exist"))
+        {
+            return "模型不存在，请检查 application.yml 里的 ai.assistant.model";
+        }
+        if (detail.contains("Arrearage") || detail.contains("欠费"))
+        {
+            return "百炼账号欠费，请先充值";
+        }
+        return "百炼返回 HTTP " + status + "：" + extractMessage(detail);
+    }
+
+    /** 从 {"error":{"message":"..."}} 里取 message，取不到就原样返回 */
+    private static String extractMessage(String detail)
+    {
+        int idx = detail.indexOf("\"message\":\"");
+        if (idx < 0)
+        {
+            return detail;
+        }
+        int start = idx + 11;
+        int end = detail.indexOf('"', start);
+        return end > start ? detail.substring(start, end) : detail;
     }
 
     /** 只对「连接阶段就失败、还没产生任何输出」的错误重试 */
