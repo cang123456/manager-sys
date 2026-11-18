@@ -1,4 +1,39 @@
 import router from '@/router'
+import usePermissionStore from '@/store/modules/permission'
+
+/**
+ * 拼出绝对路径：父 '/system' + 子 'dept' => '/system/dept'
+ * 若依的菜单树里，子路由 path 都是相对的，必须逐层累加，
+ * 否则模型拿到的是 'dept' 这种值，router.push 会按当前页面做相对解析而跑偏。
+ */
+function joinPath(parent, path) {
+  if (!path) {
+    return parent || '/'
+  }
+  if (path.startsWith('/')) {
+    return path
+  }
+  return (parent === '/' ? '' : parent || '') + '/' + path
+}
+
+/** 从若依菜单树累加出扁平清单（绝对路径 + 菜单名） */
+function walkMenus(routes, base, out, seen) {
+  for (const route of routes || []) {
+    if (!route || route.hidden === true) {
+      continue
+    }
+    const full = joinPath(base, route.path)
+    const meta = route.meta || {}
+    const title = meta.title
+    if (title && !String(full).includes(':') && !seen.has(full)) {
+      seen.add(full)
+      out.push({ path: full, title: String(title) })
+    }
+    if (route.children && route.children.length) {
+      walkMenus(route.children, full, out, seen)
+    }
+  }
+}
 
 /**
  * 当前账号真实可访问的菜单列表
@@ -7,21 +42,26 @@ import router from '@/router'
  * 所以必须把真实清单交给它，而不是让它猜。
  */
 export function getRouteCatalog() {
-  const list = []
+  const out = []
   const seen = new Set()
-  for (const route of router.getRoutes()) {
-    const meta = route.meta || {}
-    const path = route.path || ''
-    if (!path || path.includes(':') || !meta.title) {
-      continue
-    }
-    if (seen.has(path)) {
-      continue
-    }
-    seen.add(path)
-    list.push({ path, title: String(meta.title) })
+  try {
+    const store = usePermissionStore()
+    walkMenus(store.sidebarRouters, '', out, seen)
+  } catch (e) {
+    // store 不可用时退回到 router 注册表
   }
-  return list.sort((a, b) => a.path.localeCompare(b.path))
+  if (!out.length) {
+    for (const route of router.getRoutes()) {
+      const meta = route.meta || {}
+      const path = route.path || ''
+      if (!path || path.includes(':') || !meta.title || seen.has(path)) {
+        continue
+      }
+      seen.add(path)
+      out.push({ path, title: String(meta.title) })
+    }
+  }
+  return out.sort((a, b) => a.path.localeCompare(b.path))
 }
 
 /** 拼成给模型的清单文本 */
