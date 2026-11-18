@@ -96,6 +96,21 @@ const samples = ['打开用户管理', '去角色管理', '回到首页']
 const activeModel = ref('')
 const modelLabel = computed(() => (activeModel.value ? `百炼 ${activeModel.value} · 菜单跳转` : '百炼 · 菜单跳转'))
 
+/** 上一轮成功打开的页面，作为背景写进 system，而不是塞进对话历史 */
+const lastAction = ref(null)
+
+function buildSystemContent() {
+  const parts = ['你是若依后台的智能助手。用户想切换页面时调用 navigate 工具。始终以用户最后一条消息为准，不要沿用上一轮打开过的菜单。']
+  if (lastAction.value) {
+    parts.push(`背景：用户上一轮打开了 ${lastAction.value.title || '某个页面'}（${lastAction.value.route}）。`)
+  }
+  const catalog = buildRouteCatalogText()
+  if (catalog) {
+    parts.push(catalog)
+  }
+  return parts.join('\n\n')
+}
+
 let controller = null
 let aborted = false
 
@@ -152,16 +167,14 @@ async function send(preset) {
   messages.value.push({ role: 'assistant', text: '', pending: true, tool: null, result: null })
   const ai = messages.value[messages.value.length - 1]
 
-  const history = messages.value
-    .filter(m => m.role === 'user' || (m.role === 'assistant' && m.text))
-    .map(m => ({ role: m.role, content: m.text }))
-    .slice(-10)
-
-  // 把当前账号真实可访问的菜单清单塞进系统消息，避免模型编造假路由
-  const catalog = buildRouteCatalogText()
-  const payload = catalog
-    ? [{ role: 'system', content: '你是若依后台的智能助手。用户想切换页面时调用 navigate 工具。\n\n' + catalog }, ...history]
-    : history
+  /* 只发「system + 当前这一句」，不发对话历史。
+   * 实测（gui-plus）：只要有成对的 user/assistant 历史，模型就会被第一轮锚定，
+   * 说「打开角色管理」它仍返回上一轮的「用户管理」，甚至吐出非法 JSON。
+   * 把上一轮动作压成 system 里一句背景，则既能保留上下文又不会跑偏。 */
+  const payload = [
+    { role: 'system', content: buildSystemContent() },
+    { role: 'user', content }
+  ]
 
   loading.value = true
   aborted = false
@@ -239,10 +252,16 @@ async function send(preset) {
 
     ai.tool = {
       name: first.name,
-      argsText: first.argsText || '{}',
+      argsText: first.argsText || '(空)',
       id: first.id,
       showJson: false,
       raw: buildRawJson({ requestId, modelName, first, rawChunks })
+    }
+
+    // 模型偶尔只发一个空的工具调用，不要拿它拼出「打开「undefined」」这种话
+    if (!args || !args.route) {
+      typeInto(ai, '模型这次没给出具体页面（参数是空的）。请再说一次要打开哪个菜单，比如「打开角色管理」。')
+      return
     }
 
     typeInto(ai, describeToolCall(first.name, args))
@@ -252,6 +271,12 @@ async function send(preset) {
       : { ok: false, error: `未注册的工具：${first.name}` }
 
     ai.result = buildResult(result, first.argsText)
+
+    // 只在真的跳成功时记背景，失败的不记，避免把错误页面带进下一轮
+    if (result.ok && result.debug && result.debug.跳转后) {
+      lastAction.value = { route: result.debug.跳转后, title: args.title || first.argsText }
+    }
+
     scrollToBottom()
     return
   }
@@ -268,13 +293,16 @@ function buildResult(result, argsText) {
   }
   const d = result.debug || {}
   const moved = d.跳转前 !== d.跳转后
-  return {
-    ok: moved,
-    text: moved
-      ? `已跳转到 ${d.跳转后 || result.route}`
-      : `路径没有变化（${d.跳转前 || '?'} → ${d.跳转后 || '?'}），路由可能被重定向回原页`,
-    debug: Object.keys(d).length ? JSON.stringify(d, null, 2) : ''
+  const debugText = Object.keys(d).length ? JSON.stringify(d, null, 2) : ''
+
+  if (moved) {
+    return { ok: true, text: `已跳转到 ${d.跳转后 || result.route}`, debug: debugText }
   }
+  // 目标本来就是当前页面，属于正常情况，不该报失败
+  if (d.目标路由 && d.跳转前 === d.目标路由) {
+    return { ok: true, text: `你已经在 ${d.跳转前} 页面了`, debug: debugText }
+  }
+  return { ok: false, text: `跳转没有生效（${d.跳转前 || '?'} → ${d.跳转后 || '?'}）`, debug: debugText }
 }
 
 /** 手动重试：不经过模型，直接拿上次的参数再执行一次，用来区分是路由问题还是 AI 流程问题 */
