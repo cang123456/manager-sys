@@ -86,6 +86,37 @@ function findByTitle(title) {
     || null
 }
 
+/** 跳转失败时把诊断信息打到控制台，方便 F12 一眼定位 */
+function fail(message, debug) {
+  if (typeof console !== 'undefined') {
+    console.warn('[AI] navigate 失败：' + message, debug)
+  }
+  throw new Error(message)
+}
+
+/** 去掉 query 与结尾斜杠，用于比较"是不是同一个页面" */
+function normalizePath(path) {
+  const p = String(path || '').split('?')[0].replace(/\/+$/, '')
+  return p || '/'
+}
+
+function isSamePage(a, b) {
+  return normalizePath(a) === normalizePath(b)
+}
+
+/**
+ * 这个路径能不能解析出真实页面
+ *
+ * 不能用 getRoutes().some(r => r.path === path) 判断：
+ * 动态注册的路由在某些时序下（比如开发态热更新重建 router 实例）
+ * 会从注册表里消失，但地址栏和页面还在，于是误报"路由未注册"。
+ * 用 resolve 的 matched 判断更贴近"打开它会发生什么"。
+ */
+function isRealRoute(path) {
+  const matched = (router.resolve(path).matched || [])
+  return matched.length > 0 && !matched.some(m => String(m.path).includes('pathMatch'))
+}
+
 /**
  * AI 助手的工具注册表
  *
@@ -124,7 +155,7 @@ const toolRegistry = {
     handler: async (args) => {
       const raw = String(args.route || '').trim()
       if (!raw) {
-        throw new Error('模型没有给出路由')
+        fail('模型没有给出路由', { 收到参数: args })
       }
       const target = raw.startsWith('/') ? raw : '/' + raw
       const before = router.currentRoute.value.fullPath
@@ -134,12 +165,20 @@ const toolRegistry = {
         目标路由: target,
         跳转前: before,
         已注册路由数: registered.length,
-        注册表中同名路径条数: registered.filter(r => r.path === target).length
+        解析匹配数: (router.resolve(target).matched || []).length
       }
 
-      // 先确认这个路径真的注册过，否则 push 只会改地址栏不渲染页面
+      // 已经在目标页面就直接算成功。
+      // 之前出现过"地址栏就是 /system/user、页面也正常，却提示打不开"的情况：
+      // 当时是注册表里临时缺了这一条，但我们其实根本不需要跳转。
+      if (isSamePage(before, target)) {
+        debug.说明 = '当前已在目标页面，无需跳转'
+        return { ok: true, route: before, debug }
+      }
+
+      // 先确认这个路径真能解析出页面，否则 push 只会改地址栏不渲染内容
       let finalTarget = target
-      if (!registered.some(r => r.path === target)) {
+      if (!isRealRoute(target)) {
         const fallback = findByTitle(args.title)
         // 失败时把注册表样本一起带出去，一次就能看出路径对不对
         debug.注册表样本 = registered
@@ -147,10 +186,11 @@ const toolRegistry = {
           .filter(p => p && p !== '/' && !p.includes(':'))
           .slice(0, 20)
         if (!fallback) {
-          throw new Error(`路由 ${target} 未注册，按名称「${args.title || '空'}」也没找到菜单`)
-        }
-        if (!registered.some(r => r.path === fallback.path)) {
-          throw new Error(`按名称找到 ${fallback.path}，但它也没有注册到路由表（已注册 ${registered.length} 条）`)
+          // 注册表条数异常少，基本可以断定动态菜单路由没加载进来
+          const hint = registered.length < 20
+            ? `（前端路由表只有 ${registered.length} 条，动态菜单路由可能没注册，按 F5 刷新后重试）`
+            : ''
+          fail(`路由 ${target} 解析不到页面${hint}，按名称「${args.title || '空'}」也没找到菜单`, debug)
         }
         finalTarget = fallback.path
         debug.兜底命中 = fallback.path
@@ -159,7 +199,7 @@ const toolRegistry = {
       try {
         await router.push(finalTarget)
       } catch (e) {
-        throw new Error(`router.push 失败：${e && e.message}`)
+        fail(`router.push 失败：${e && e.message}`, debug)
       }
 
       const after = router.currentRoute.value
@@ -178,7 +218,7 @@ const toolRegistry = {
         } catch (ignore) {
           // 回滚失败也不掩盖原始错误
         }
-        throw new Error(`路径 ${finalTarget} 没有对应页面（命中了 404 兜底），已回滚到 ${before}`)
+        fail(`路径 ${finalTarget} 没有对应页面（命中了 404 兜底），已回滚到 ${before}`, debug)
       }
 
       return { ok: true, route: after.fullPath, debug }
