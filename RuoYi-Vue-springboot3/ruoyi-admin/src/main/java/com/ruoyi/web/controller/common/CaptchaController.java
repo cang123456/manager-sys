@@ -65,7 +65,7 @@ public class CaptchaController
         if ("math".equals(captchaType))
         {
             String capText = captchaProducerMath.createText();
-            capStr = capText.substring(0, capText.lastIndexOf("@"));
+            capStr = capText.substring(0, capText.lastIndexOf("@"));// 从0截止到@的下标（左闭右开）
             code = capText.substring(capText.lastIndexOf("@") + 1);
             image = captchaProducerMath.createImage(capStr);
         }
