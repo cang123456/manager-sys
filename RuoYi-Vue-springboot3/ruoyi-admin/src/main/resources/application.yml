@@ -45,8 +45,23 @@ user:
     # 密码锁定时间（默认10分钟）
     lockTime: 10
 
+# AI 助手配置（api-key 建议放 ai-local.yml 或环境变量，不要直接写在这里）
+ai:
+  assistant:
+    # 百炼 OpenAI 兼容端点
+    base-url: https://ws-fnkwccg0p9sy8jaz.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+    # 默认模型，可换成 qwen3.6-plus / qwen-max / deepseek-v4-flash
+    model: qwen-plus
+    # 优先取环境变量，其次由 ai-local.yml 覆盖
+    api-key: ${AI_ASSISTANT_API_KEY:}
+    # 单次请求超时（秒）
+    timeout-seconds: 120
+
 # Spring配置
 spring:
+  # 本地私有配置（AI Key 等），该文件不进版本库
+  config:
+    import: optional:classpath:ai-local.yml
   # 资源信息
   messages:
     # 国际化资源文件路径

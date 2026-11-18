@@ -10,6 +10,8 @@
       <app-main />
       <settings ref="settingRef" />
     </div>
+    <!-- AI 助手：悬浮球 + 侧边抽屉，任意页面可用 -->
+    <ai-assistant />
   </div>
 </template>
 
@@ -17,6 +19,7 @@
 import { useWindowSize } from '@vueuse/core'
 import Sidebar from './components/Sidebar/index.vue'
 import { AppMain, Navbar, Settings, TagsView } from './components'
+import AiAssistant from '@/components/AiAssistant/index.vue'
 import useAppStore from '@/store/modules/app'
 import useSettingsStore from '@/store/modules/settings'
 

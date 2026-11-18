@@ -1,5 +1,7 @@
 package com.ruoyi.framework.config;
 
+import jakarta.servlet.DispatcherType;
+
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -99,6 +101,11 @@ public class SecurityConfig
             // 注解标记允许匿名访问的url
             .authorizeHttpRequests((requests) -> {
                 permitAllUrl.getUrls().forEach(url -> requests.requestMatchers(url).permitAll());
+                // 异步/错误分派放行：SSE（如 AI 助手）等异步请求在响应已提交后会再走一次
+                // 过滤器链，此时 SecurityContext 已清空，再鉴权必然 Access Denied，
+                // 结果是把已经写出一半的响应连接掐断（前端表现为 Connection reset）。
+                // 初次 REQUEST 分派已经鉴权过，这里放行 ASYNC / ERROR 不会造成越权。
+                requests.dispatcherTypeMatchers(DispatcherType.ASYNC, DispatcherType.ERROR).permitAll();
                 // 对于登录login 注册register 验证码captchaImage 允许匿名访问
                 requests.requestMatchers("/login", "/register", "/captchaImage").permitAll()
                     // 静态资源，可匿名访问
