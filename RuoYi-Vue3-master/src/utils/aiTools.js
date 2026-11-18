@@ -2,6 +2,36 @@ import router from '@/router'
 import usePermissionStore from '@/store/modules/permission'
 
 /**
+ * 用应用实际装着的那一个 router 实例
+ *
+ * 排查出来的坑：开发态 HMR 会重新执行 src/router/index.js，于是创建出第二个
+ * router 实例——main.js 里 app.use() 绑的是旧的（所以页面导航一切正常），
+ * 而模块级 import 拿到的是新的，它的 matchers 里只有静态路由，
+ * 动态菜单注册的路由一条都没有。
+ *
+ * 现象就是：已注册路由数 11（全是 /login /register /401 /index /lock /user 这类），
+ * 但菜单里明明有 /monitor/cache，助手却报"路由没有对应页面"，F5 之后又好了。
+ *
+ * 所以由组件通过 useRouter() 把 app 里的实例交进来，优先用它；
+ * 拿不到才退回模块级 import。
+ */
+let boundRouter = null
+
+export function bindRouter(r) {
+  if (!r) {
+    return
+  }
+  if (boundRouter && r !== boundRouter) {
+    console.warn('[AI] 路由实例发生变化，已切换到应用当前实例')
+  }
+  boundRouter = r
+}
+
+function currentRouter() {
+  return boundRouter || router
+}
+
+/**
  * 拼出绝对路径：父 '/system' + 子 'dept' => '/system/dept'
  * 若依的菜单树里，子路由 path 都是相对的，必须逐层累加，
  * 否则模型拿到的是 'dept' 这种值，router.push 会按当前页面做相对解析而跑偏。
@@ -51,7 +81,7 @@ export function getRouteCatalog() {
     // store 不可用时退回到 router 注册表
   }
   if (!out.length) {
-    for (const route of router.getRoutes()) {
+    for (const route of currentRouter().getRoutes()) {
       const meta = route.meta || {}
       const path = route.path || ''
       if (!path || path.includes(':') || !meta.title || seen.has(path)) {
@@ -96,7 +126,7 @@ function fail(message, debug) {
 
 /** 去掉 query 与结尾斜杠，用于比较"是不是同一个页面" */
 function normalizePath(path) {
-  const p = String(path || '').split('?')[0].replace(/\/+$/, '')
+  const p = String(path || '').trim().split('?')[0].replace(/\/+$/, '')
   return p || '/'
 }
 
@@ -113,7 +143,7 @@ function isSamePage(a, b) {
  * 用 resolve 的 matched 判断更贴近"打开它会发生什么"。
  */
 function isRealRoute(path) {
-  const matched = (router.resolve(path).matched || [])
+  const matched = (currentRouter().resolve(path).matched || [])
   return matched.length > 0 && !matched.some(m => String(m.path).includes('pathMatch'))
 }
 
@@ -158,14 +188,14 @@ const toolRegistry = {
         fail('模型没有给出路由', { 收到参数: args })
       }
       const target = raw.startsWith('/') ? raw : '/' + raw
-      const before = router.currentRoute.value.fullPath
-      const registered = router.getRoutes()
+      const before = String(currentRouter().currentRoute.value.fullPath || '/').trim()
+      const registered = currentRouter().getRoutes()
 
       const debug = {
         目标路由: target,
         跳转前: before,
         已注册路由数: registered.length,
-        解析匹配数: (router.resolve(target).matched || []).length
+        解析匹配数: (currentRouter().resolve(target).matched || []).length
       }
 
       // 已经在目标页面就直接算成功。
@@ -174,6 +204,14 @@ const toolRegistry = {
       if (isSamePage(before, target)) {
         debug.说明 = '当前已在目标页面，无需跳转'
         return { ok: true, route: before, debug }
+      }
+
+      // 菜单数据比路由表还多，说明动态路由没注册完整。此时跳任何动态菜单
+      // 都会落进 404 兜底，不如直接告诉用户刷新，别让他反复试。
+      const catalog = getRouteCatalog()
+      if (catalog.length && catalog.length > registered.length) {
+        fail(`菜单里有 ${catalog.length} 条可访问项，但前端路由表只注册了 ${registered.length} 条，`
+          + '动态菜单路由没加载完整（长时间未刷新或开发态热更新常见）。按 F5 刷新后重试。', debug)
       }
 
       // 先确认这个路径真能解析出页面，否则 push 只会改地址栏不渲染内容
@@ -197,12 +235,12 @@ const toolRegistry = {
       }
 
       try {
-        await router.push(finalTarget)
+        await currentRouter().push(finalTarget)
       } catch (e) {
         fail(`router.push 失败：${e && e.message}`, debug)
       }
 
-      const after = router.currentRoute.value
+      const after = currentRouter().currentRoute.value
       const matchedList = after.matched || []
       const hitCatchAll = matchedList.some(m => String(m.path).includes('pathMatch'))
       debug.跳转后 = after.fullPath
@@ -214,7 +252,7 @@ const toolRegistry = {
       // 命中 404 兜底路由 = 路径是野的（地址栏会变，但页面渲染成 404/空白）
       if (!matchedList.length || hitCatchAll) {
         try {
-          await router.replace(before || '/index')
+          await currentRouter().replace(before || '/index')
         } catch (ignore) {
           // 回滚失败也不掩盖原始错误
         }

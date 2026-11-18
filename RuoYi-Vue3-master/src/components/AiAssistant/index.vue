@@ -82,8 +82,14 @@
 
 <script setup>
 import { ref, computed, nextTick, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { chatStream, postToolResult, resetSession } from '@/api/ai'
-import { describeToolCall, executeTool, hasTool } from '@/utils/aiTools'
+import { describeToolCall, executeTool, hasTool, bindRouter } from '@/utils/aiTools'
+
+// 把应用实际在用的 router 交给工具层。
+// 开发态 HMR 可能重新执行 router 模块，模块级 import 拿到的是没有动态路由的新实例，
+// 会让助手误判"路由未注册"；useRouter() 取的是 app.use() 绑定的那个实例。
+bindRouter(useRouter())
 
 const open = ref(false)
 const input = ref('')
