@@ -52,7 +52,10 @@ public class AiChatService
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     private final HttpClient httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(15))
+            // 该域名解析出两个 IPv4，其中一个从本机连接要耗约 2 秒才失败，
+            // JDK 会在这个时间内换下一个地址。4 秒足够走完一次换路，
+            // 又不至于把"连不上"拖成 15 秒的假死。
+            .connectTimeout(Duration.ofSeconds(4))
             // 强制 HTTP/1.1：SSE 走 HTTP/2 时，部分网关会在流中途重置连接
             .version(HttpClient.Version.HTTP_1_1)
             .build();
@@ -173,7 +176,7 @@ public class AiChatService
             // 连接池里可能躺着一条「服务端已经关掉、客户端还以为能用」的空闲连接，
             // 复用它会得到 "HTTP/1.1 header parser received no bytes"。
             // 这种情况一个字节都还没写回浏览器，重试一次即可，不会重复计费也不会重复输出。
-            for (int attempt = 1; attempt <= 2 && response == null; attempt++)
+            for (int attempt = 1; attempt <= 3 && response == null; attempt++)
             {
                 try
                 {
@@ -185,9 +188,9 @@ public class AiChatService
                 catch (ExecutionException e)
                 {
                     lastFailure = e.getCause() instanceof Exception ? (Exception) e.getCause() : e;
-                    if (attempt == 1 && isRetryable(lastFailure))
+                    if (attempt < 3 && isRetryable(lastFailure))
                     {
-                        log.warn("[AI] 与百炼的连接不可用，重试一次：{}", lastFailure.getMessage());
+                        log.warn("[AI] 第 {} 次连接失败，重试：{}", attempt, lastFailure.getMessage());
                         continue;
                     }
                     throw lastFailure;
@@ -294,8 +297,7 @@ public class AiChatService
         String msg = e.getMessage() == null ? "" : e.getMessage();
         if (msg.contains("connect timed out") || msg.contains("Connection refused"))
         {
-            return "连不上百炼（TCP 连接失败）。若本机 IPv6 不可达而域名有 AAAA 记录，"
-                    + "JDK 不会自动回退 IPv4，需加 JVM 参数 -Djava.net.preferIPv4Stack=true";
+            return "连不上百炼（网络连接超时，已自动重试 3 次）。请稍等片刻再试；若持续出现，检查本机网络或代理";
         }
         if (name.contains("Timeout") || msg.contains("timed out"))
         {
@@ -419,6 +421,7 @@ public class AiChatService
         return msg.contains("header parser received no bytes")
                 || msg.contains("Connection reset")
                 || msg.contains("Connection refused")
+                || msg.contains("connect timed out")
                 || msg.contains("closed");
     }
 
