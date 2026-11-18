@@ -127,22 +127,61 @@ const toolRegistry = {
         throw new Error('模型没有给出路由')
       }
       const target = raw.startsWith('/') ? raw : '/' + raw
-      const resolved = router.resolve(target)
-      const matched = resolved && resolved.matched && resolved.matched.length > 0
+      const before = router.currentRoute.value.fullPath
+      const registered = router.getRoutes()
 
-      if (matched) {
-        await router.push(target)
-        return { ok: true, route: target }
+      const debug = {
+        目标路由: target,
+        跳转前: before,
+        已注册路由数: registered.length,
+        注册表中同名路径条数: registered.filter(r => r.path === target).length
       }
 
-      // 兜底：模型给了假路由（如 userManage），用中文名反查真实路径
-      const fallback = findByTitle(args.title)
-      if (fallback) {
-        await router.push(fallback.path)
-        return { ok: true, route: fallback.path, corrected: true }
+      // 先确认这个路径真的注册过，否则 push 只会改地址栏不渲染页面
+      let finalTarget = target
+      if (!registered.some(r => r.path === target)) {
+        const fallback = findByTitle(args.title)
+        // 失败时把注册表样本一起带出去，一次就能看出路径对不对
+        debug.注册表样本 = registered
+          .map(r => r.path)
+          .filter(p => p && p !== '/' && !p.includes(':'))
+          .slice(0, 20)
+        if (!fallback) {
+          throw new Error(`路由 ${target} 未注册，按名称「${args.title || '空'}」也没找到菜单`)
+        }
+        if (!registered.some(r => r.path === fallback.path)) {
+          throw new Error(`按名称找到 ${fallback.path}，但它也没有注册到路由表（已注册 ${registered.length} 条）`)
+        }
+        finalTarget = fallback.path
+        debug.兜底命中 = fallback.path
       }
 
-      throw new Error(`路由 ${target} 不存在，且按名称「${args.title || '空'}」也没找到对应菜单`)
+      try {
+        await router.push(finalTarget)
+      } catch (e) {
+        throw new Error(`router.push 失败：${e && e.message}`)
+      }
+
+      const after = router.currentRoute.value
+      const matchedList = after.matched || []
+      const hitCatchAll = matchedList.some(m => String(m.path).includes('pathMatch'))
+      debug.跳转后 = after.fullPath
+      debug.跳转后匹配数 = matchedList.length
+      if (hitCatchAll) {
+        debug.命中兜底404 = true
+      }
+
+      // 命中 404 兜底路由 = 路径是野的（地址栏会变，但页面渲染成 404/空白）
+      if (!matchedList.length || hitCatchAll) {
+        try {
+          await router.replace(before || '/index')
+        } catch (ignore) {
+          // 回滚失败也不掩盖原始错误
+        }
+        throw new Error(`路径 ${finalTarget} 没有对应页面（命中了 404 兜底），已回滚到 ${before}`)
+      }
+
+      return { ok: true, route: after.fullPath, debug }
     }
   }
 }

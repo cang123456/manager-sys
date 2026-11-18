@@ -48,9 +48,13 @@
               <button class="ai-link" @click="m.showJson = !m.showJson">
                 {{ m.showJson ? '收起原始 JSON' : '查看原始 JSON' }}
               </button>
+              <button v-if="m.result && !m.result.ok" class="ai-link" @click="retryTool(m)">
+                再跳一次
+              </button>
               <pre v-if="m.showJson" class="ai-json">{{ m.tool.raw }}</pre>
               <div v-if="m.result" :class="['ai-result', m.result.ok ? 'ok' : 'fail']">
-                {{ m.result.text }}
+                <div>{{ m.result.text }}</div>
+                <pre v-if="m.result.debug" class="ai-json">{{ m.result.debug }}</pre>
               </div>
             </div>
           </div>
@@ -247,9 +251,7 @@ async function send(preset) {
       ? await executeTool(first.name, args)
       : { ok: false, error: `未注册的工具：${first.name}` }
 
-    ai.result = result.ok
-      ? { ok: true, text: '已跳转到 ' + (result.route || '') }
-      : { ok: false, text: '执行失败：' + result.error }
+    ai.result = buildResult(result, first.argsText)
     scrollToBottom()
     return
   }
@@ -257,6 +259,38 @@ async function send(preset) {
   if (!gotContent && !ai.text) {
     typeInto(ai, '这句话我没听明白。可以说「打开用户管理」这种指定页面的指令。')
   }
+}
+
+/** 统一整理执行结果：跳转前后路径没变也要明确说出来，不能假装成功 */
+function buildResult(result, argsText) {
+  if (!result.ok) {
+    return { ok: false, text: '执行失败：' + result.error, debug: result.debug ? JSON.stringify(result.debug, null, 2) : '' }
+  }
+  const d = result.debug || {}
+  const moved = d.跳转前 !== d.跳转后
+  return {
+    ok: moved,
+    text: moved
+      ? `已跳转到 ${d.跳转后 || result.route}`
+      : `路径没有变化（${d.跳转前 || '?'} → ${d.跳转后 || '?'}），路由可能被重定向回原页`,
+    debug: Object.keys(d).length ? JSON.stringify(d, null, 2) : ''
+  }
+}
+
+/** 手动重试：不经过模型，直接拿上次的参数再执行一次，用来区分是路由问题还是 AI 流程问题 */
+async function retryTool(msg) {
+  if (!msg.tool) {
+    return
+  }
+  let args = {}
+  try {
+    args = JSON.parse(msg.tool.argsText || '{}')
+  } catch (e) {
+    args = {}
+  }
+  msg.result = { ok: false, text: '正在重试…', debug: '' }
+  const result = await executeTool(msg.tool.name, args)
+  msg.result = buildResult(result, msg.tool.argsText)
 }
 
 function stop() {
