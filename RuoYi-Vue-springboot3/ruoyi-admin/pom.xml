@@ -42,6 +42,18 @@
             <version>${langchain4j.version}</version>
         </dependency>
 
+        <!-- OkHttp：接管 LangChain4j 的底层连接。
+             框架自带的 JDK HttpClient 走 HTTP/2 时，服务端关闭连接会把同一条
+             连接上的所有流一起打断（连坐），且没有应用层 PING 可用。
+             OkHttp 支持 HTTP/2 PING 保活、连接池过期、复用失败自动换连接。
+             注意：LangChain4j 1.0.0 没有 OkHttp 适配模块（那是 1.20+ 才有的），
+             所以由 OkHttpSseHttpClient 自己实现框架的 HttpClient 接口。 -->
+        <dependency>
+            <groupId>com.squareup.okhttp3</groupId>
+            <artifactId>okhttp</artifactId>
+            <version>${okhttp.version}</version>
+        </dependency>
+
          <!-- Mysql驱动包 -->
         <dependency>
             <groupId>com.mysql</groupId>

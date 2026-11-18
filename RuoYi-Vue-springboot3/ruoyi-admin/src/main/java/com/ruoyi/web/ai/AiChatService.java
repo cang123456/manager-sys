@@ -86,14 +86,25 @@ public class AiChatService
         {
             try
             {
+                // 自己接的 OkHttp：HTTP/2 + PING 保活 + 连接池过期 + 复用失败自动换连接。
+                // 用默认的 JDK HttpClient 时，服务端关闭 HTTP/2 连接会把同一条连接上
+                // 所有流一起打断（Connection reset），且没有应用层 PING 可用。
+                OkHttpSseHttpClient.Builder httpClient = OkHttpSseHttpClient.builder()
+                        .connectTimeout(Duration.ofSeconds(4))
+                        .readTimeout(Duration.ofSeconds(properties.getTimeoutSeconds()))
+                        .pingInterval(Duration.ofSeconds(30))
+                        .keepAlive(Duration.ofSeconds(30));
+
                 built = OpenAiStreamingChatModel.builder()
                         .baseUrl(properties.getBaseUrl())
                         .apiKey(properties.getApiKey())
                         .modelName(properties.getModel())
                         .timeout(Duration.ofSeconds(properties.getTimeoutSeconds()))
+                        .httpClientBuilder(httpClient)
                         .logRequests(false)
                         .logResponses(false)
                         .build();
+                log.info("[AI] 聊天模型已就绪：model={}，传输层=OkHttp(HTTP/2 + 30s PING)", properties.getModel());
             }
             catch (Exception e)
             {
@@ -320,6 +331,11 @@ public class AiChatService
         if (msg.contains("connect timed out") || msg.contains("Connection refused"))
         {
             return "连不上百炼（网络连接超时），请稍后再试";
+        }
+        if (msg.contains("Connection reset") || msg.contains("SocketException")
+                || msg.contains("GOAWAY") || msg.contains("unexpected end of stream"))
+        {
+            return "与百炼的连接被中断（服务端关闭了连接），请再试一次";
         }
         return "调用失败：" + msg;
     }
