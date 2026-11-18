@@ -81,7 +81,7 @@
 </template>
 
 <script setup>
-import { ref, computed, nextTick } from 'vue'
+import { ref, computed, nextTick, watch } from 'vue'
 import { chatStream, postToolResult, resetSession } from '@/api/ai'
 import { describeToolCall, executeTool, hasTool } from '@/utils/aiTools'
 
@@ -109,11 +109,58 @@ function ensureSessionId() {
   return id
 }
 
+/* ---------- 界面消息的本地缓存 ----------
+ * 后端记忆在 Redis，但界面上那串气泡只存在本组件的内存里，F5 一刷新就空，
+ * 看起来像"记忆丢了"——其实模型那边还记得。这里把 messages 同步到本地存储，
+ * 刷新后恢复展示。
+ *
+ * 注意定位：它只是**展示层缓存**，不是记忆的真相源。真相在 Redis，
+ * 清掉浏览器数据不会让模型失忆，只会让界面变空。
+ */
+function messagesKey(sessionId) {
+  return 'ai-assistant-messages:' + sessionId
+}
+
+function loadMessages() {
+  try {
+    const raw = localStorage.getItem(messagesKey(ensureSessionId()))
+    if (!raw) return []
+    const list = JSON.parse(raw)
+    if (!Array.isArray(list)) return []
+    // 刷新时不可能还有请求在飞，pending 一律清掉，否则会一直转圈
+    return list.map(m => ({ ...m, pending: false }))
+  } catch (e) {
+    return []
+  }
+}
+
+function persistMessages() {
+  try {
+    localStorage.setItem(messagesKey(ensureSessionId()), JSON.stringify(messages.value))
+  } catch (e) {
+    // 超出容量就放弃缓存，不影响对话本身
+  }
+}
+
+/** 打字机每 18ms 改一次 text，不能每次都写盘，节流 500ms */
+let persistTimer = null
+function schedulePersist() {
+  if (persistTimer) return
+  persistTimer = setTimeout(() => {
+    persistTimer = null
+    persistMessages()
+  }, 500)
+}
+
+messages.value = loadMessages()
+watch(messages, schedulePersist, { deep: true })
+
 /** 开一个新会话：清空后端记忆 + 界面消息 */
 async function newSession() {
   const old = localStorage.getItem(SESSION_KEY)
   if (old) {
     resetSession(old).catch(() => {})
+    localStorage.removeItem(messagesKey(old))
   }
   localStorage.removeItem(SESSION_KEY)
   ensureSessionId()
