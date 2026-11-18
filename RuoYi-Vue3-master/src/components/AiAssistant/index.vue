@@ -17,7 +17,7 @@
             <span class="ai-logo">AI</span>
             <div class="ai-brand-text">
               <div class="ai-name">智能助手</div>
-              <div class="ai-desc">百炼 qwen-plus · 菜单跳转</div>
+              <div class="ai-desc">{{ modelLabel }}</div>
             </div>
           </div>
           <button class="ai-icon-btn" title="收起" @click="open = false">✕</button>
@@ -76,7 +76,7 @@
 </template>
 
 <script setup>
-import { ref, nextTick } from 'vue'
+import { ref, computed, nextTick } from 'vue'
 import { chatStream } from '@/api/ai'
 import { getToolSchemas, describeToolCall, executeTool, hasTool } from '@/utils/aiTools'
 
@@ -87,6 +87,10 @@ const messages = ref([])
 const bodyRef = ref(null)
 const inputRef = ref(null)
 const samples = ['打开用户管理', '去角色管理', '回到首页']
+
+/** 实际使用的模型名：来自后端返回的分片，拿到之前不写死 */
+const activeModel = ref('')
+const modelLabel = computed(() => (activeModel.value ? `百炼 ${activeModel.value} · 菜单跳转` : '百炼 · 菜单跳转'))
 
 let controller = null
 let aborted = false
@@ -168,7 +172,10 @@ async function send(preset) {
       onChunk(chunk) {
         rawChunks.push(chunk)
         if (chunk.id) requestId = chunk.id
-        if (chunk.model) modelName = chunk.model
+        if (chunk.model) {
+          modelName = chunk.model
+          activeModel.value = chunk.model
+        }
 
         const choice = chunk.choices && chunk.choices[0]
         const delta = choice && choice.delta
